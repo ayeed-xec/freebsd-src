@@ -297,6 +297,7 @@ static const struct filterops timerfd_rfiltops = {
 	.f_isfd = 1,
 	.f_detach = filt_timerfddetach,
 	.f_event = filt_timerfdread,
+	.f_copy = knote_triv_copy,
 };
 
 static int

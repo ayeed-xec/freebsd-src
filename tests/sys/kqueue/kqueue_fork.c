@@ -29,6 +29,7 @@
 #include <sys/event.h>
 #include <sys/procdesc.h>
 #include <sys/stat.h>
+#include <sys/timerfd.h>
 #include <sys/user.h>
 #include <sys/wait.h>
 
@@ -304,11 +305,69 @@ ATF_TC_BODY(cponfork_timer_race, tc)
 	}
 }
 
+/*
+ * A timerfd knote on a KQUEUE_CPONFORK kqueue must be copied into the child,
+ * so that both the parent and the child observe the timer expiring.
+ */
+ATF_TC_WITHOUT_HEAD(cponfork_timerfd);
+ATF_TC_BODY(cponfork_timerfd, tc)
+{
+	struct itimerspec its = { .it_value.tv_nsec = 100 * 1000 * 1000 };
+	struct timespec timeout = { .tv_sec = 5 };
+	struct kevent ev;
+	int error, kq, status, tfd;
+	pid_t pid;
+
+	kq = kqueuex(KQUEUE_CPONFORK);
+	ATF_REQUIRE(kq >= 0);
+
+	tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+	ATF_REQUIRE(tfd >= 0);
+
+	EV_SET(&ev, tfd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+	error = kevent(kq, &ev, 1, NULL, 0, NULL);
+	ATF_REQUIRE(error == 0);
+
+	error = timerfd_settime(tfd, 0, &its, NULL);
+	ATF_REQUIRE(error == 0);
+
+	pid = fork();
+	ATF_REQUIRE(pid != -1);
+	if (pid == 0) {
+		error = kevent(kq, NULL, 0, &ev, 1, &timeout);
+		if (error != 1)
+			_exit(1);
+		if (ev.filter != EVFILT_READ || (int)ev.ident != tfd)
+			_exit(2);
+		_exit(0);
+	}
+
+	/*
+	 * Nobody reads the timerfd, so its expiration count stays non-zero and
+	 * the parent's knote fires as well.
+	 */
+	error = kevent(kq, NULL, 0, &ev, 1, &timeout);
+	ATF_REQUIRE_EQ(1, error);
+	ATF_REQUIRE_EQ(EVFILT_READ, ev.filter);
+	ATF_REQUIRE_EQ(tfd, (int)ev.ident);
+
+	error = waitpid(pid, &status, 0);
+	ATF_REQUIRE(error != -1);
+	ATF_REQUIRE(WIFEXITED(status));
+	ATF_REQUIRE_EQ_MSG(0, WEXITSTATUS(status),
+	    "child did not observe the timerfd event (status %d)",
+	    WEXITSTATUS(status));
+
+	ATF_REQUIRE(close(tfd) == 0);
+	ATF_REQUIRE(close(kq) == 0);
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, shared_table_filt_sig);
 	ATF_TP_ADD_TC(tp, cponfork_notes);
 	ATF_TP_ADD_TC(tp, cponfork_timer_race);
+	ATF_TP_ADD_TC(tp, cponfork_timerfd);
 
 	return (atf_no_error());
 }
