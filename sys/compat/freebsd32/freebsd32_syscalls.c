@@ -608,4 +608,13 @@ const char *freebsd32_syscallnames[] = {
 	"pdrfork",			/* 600 = pdrfork */
 	"freebsd32_pdwait",			/* 601 = freebsd32_pdwait */
 	"renameat2",			/* 602 = renameat2 */
+	"#603",			/* 603 = reserved for local use */
+	"#604",			/* 604 = reserved for local use */
+	"#605",			/* 605 = reserved for local use */
+	"#606",			/* 606 = reserved for local use */
+	"#607",			/* 607 = reserved for local use */
+	"#608",			/* 608 = reserved for local use */
+	"#609",			/* 609 = reserved for local use */
+	"epoll_ctl",			/* 610 = epoll_ctl */
+	"freebsd32_epoll_pwait2",			/* 611 = freebsd32_epoll_pwait2 */
 };

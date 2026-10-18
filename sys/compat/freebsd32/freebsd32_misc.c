@@ -42,6 +42,7 @@
 #include <sys/bus.h>
 #include <sys/capsicum.h>
 #include <sys/clock.h>
+#include <sys/epoll.h>
 #include <sys/exec.h>
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
@@ -4040,6 +4041,37 @@ freebsd32_ppoll(struct thread *td, struct freebsd32_ppoll_args *uap)
 		ssp = NULL;
 
 	return (kern_poll(td, uap->fds, uap->nfds, tsp, ssp));
+}
+
+int
+freebsd32_epoll_pwait2(struct thread *td,
+    struct freebsd32_epoll_pwait2_args *uap)
+{
+	struct timespec32 ts32;
+	struct timespec ts, *tsp;
+	sigset_t set, *ssp;
+	int error;
+
+	if (uap->timeout != NULL) {
+		error = copyin(uap->timeout, &ts32, sizeof(ts32));
+		if (error != 0)
+			return (error);
+		CP(ts32, ts, tv_sec);
+		CP(ts32, ts, tv_nsec);
+		tsp = &ts;
+	} else
+		tsp = NULL;
+	if (uap->sigmask != NULL) {
+		error = copyin(uap->sigmask, &set, sizeof(set));
+		if (error != 0)
+			return (error);
+		ssp = &set;
+	} else
+		ssp = NULL;
+
+	/* struct epoll_event has the same layout for 32-bit processes. */
+	return (kern_epoll_wait(td, uap->epfd, uap->events, uap->maxevents,
+	    tsp, ssp));
 }
 
 int

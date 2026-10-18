@@ -50,6 +50,11 @@ struct selinfo {
 #define	SEL_WAITING(si)		(!TAILQ_EMPTY(&(si)->si_tdlist))
 
 #ifdef _KERNEL
+struct file;
+struct ucred;
+
+int	poll_file_norecord(struct file *fp, int events,
+	    struct ucred *active_cred, struct thread *td);
 void	seldrain(struct selinfo *sip);
 void	selrecord(struct thread *selector, struct selinfo *sip);
 void	selwakeup(struct selinfo *sip);

@@ -33,6 +33,8 @@
 #error "no user-serviceable parts inside"
 #endif
 
+#include <sys/_lock.h>
+#include <sys/_sx.h>
 #include <sys/_task.h>
 
 #define KQ_NEVENTS	8		/* minimize copy{in,out} calls */
@@ -56,6 +58,7 @@ struct kqueue {
 #define	KQ_TASKSCHED	0x20			/* task scheduled */
 #define	KQ_TASKDRAIN	0x40			/* waiting for task to drain */
 #define	KQ_CPONFORK	0x80
+#define	KQ_EPOLL	0x100			/* epoll(2) instance */
 	int		kq_knlistsize;		/* size of knlist */
 	struct		klist *kq_knlist;	/* list of knotes */
 	u_long		kq_knhashmask;		/* size of knhash */
@@ -63,6 +66,25 @@ struct kqueue {
 	struct		task kq_task;
 	struct		ucred *kq_cred;
 	struct		kqueue *kq_forksrc;
+	struct		sx kq_epoll_sx;		/* KQ_EPOLL: epoll_ctl(2) */
 };
+
+struct epoll_event;
+struct timespec;
+
+typedef int	kqueue_epoll_copyout_t(void *arg, struct epoll_event *ev,
+		    int count);
+
+int	kqueue_epoll_acquire(struct file *fp, struct kqueue **kqp);
+int	kqueue_epoll_alloc(struct thread *td, struct file *fp);
+int	kqueue_epoll_check_nest(struct kqueue *kq, struct file *fp,
+	    struct thread *td);
+bool	kqueue_epoll_lookup(struct kqueue *kq, int fd, uint64_t *eventsp);
+int	kqueue_epoll_register(struct kqueue *kq, struct kevent *kev,
+	    struct thread *td);
+void	kqueue_epoll_release(struct kqueue *kq);
+int	kqueue_epoll_scan(struct kqueue *kq, int maxevents,
+	    kqueue_epoll_copyout_t *copyout, void *arg,
+	    const struct timespec *tsp, struct thread *td);
 
 #endif /* !_SYS_EVENTVAR_H_ */

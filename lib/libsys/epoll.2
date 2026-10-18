@@ -1,0 +1,376 @@
+.\"
+.\" Copyright (c) 2026 Ayeed Shaikh <Ayeed.AI10@race.reva.edu.in>
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd October 18, 2026
+.Dt EPOLL 2
+.Os
+.Sh NAME
+.Nm epoll_create ,
+.Nm epoll_create1 ,
+.Nm epoll_ctl ,
+.Nm epoll_wait ,
+.Nm epoll_pwait ,
+.Nm epoll_pwait2
+.Nd I/O event notification for many file descriptors
+.Sh LIBRARY
+.Lb libc
+.Sh SYNOPSIS
+.In sys/epoll.h
+.Ft int
+.Fn epoll_create "int size"
+.Ft int
+.Fn epoll_create1 "int flags"
+.Ft int
+.Fn epoll_ctl "int epfd" "int op" "int fd" "struct epoll_event *event"
+.Ft int
+.Fn epoll_wait "int epfd" "struct epoll_event *events" "int maxevents" "int timeout"
+.Ft int
+.Fo epoll_pwait
+.Fa "int epfd"
+.Fa "struct epoll_event *events"
+.Fa "int maxevents"
+.Fa "int timeout"
+.Fa "const sigset_t *sigmask"
+.Fc
+.Ft int
+.Fo epoll_pwait2
+.Fa "int epfd"
+.Fa "struct epoll_event *events"
+.Fa "int maxevents"
+.Fa "const struct timespec *timeout"
+.Fa "const sigset_t *sigmask"
+.Fc
+.Sh DESCRIPTION
+An epoll instance watches a set of file descriptors and reports which of
+them are ready for I/O.
+It is a
+.Xr kqueue 2
+with the event model of the Linux epoll interface:
+each registered descriptor gives at most one event for each wait, and the
+reported events are the
+.Xr poll 2
+events of the descriptor.
+.Pp
+The
+.Fn epoll_create1
+function returns a new epoll instance.
+The
+.Fa flags
+argument is 0 or
+.Dv EPOLL_CLOEXEC ,
+which sets the close-on-exec flag of the new descriptor.
+The
+.Fn epoll_create
+function is the same as
+.Fn epoll_create1
+with no flags; its
+.Fa size
+argument must be greater than 0 and has no other effect.
+.Pp
+The
+.Fn epoll_ctl
+system call changes the registration of the descriptor
+.Fa fd
+in the instance
+.Fa epfd .
+The
+.Fa op
+argument is one of:
+.Bl -tag -width EPOLL_CTL_ADD
+.It Dv EPOLL_CTL_ADD
+Register
+.Fa fd
+with the events and the data of
+.Fa event .
+.It Dv EPOLL_CTL_MOD
+Replace the events and the data of the registration of
+.Fa fd .
+.It Dv EPOLL_CTL_DEL
+Remove the registration of
+.Fa fd .
+A pending event of the registration is removed too.
+The
+.Fa event
+argument can be
+.Dv NULL .
+.El
+.Pp
+The
+.Vt epoll_event
+structure is:
+.Bd -literal
+typedef union epoll_data {
+	void		*ptr;
+	int		fd;
+	uint32_t	u32;
+	uint64_t	u64;
+} epoll_data_t;
+
+struct epoll_event {
+	uint32_t	events;	/* epoll events */
+	epoll_data_t	data;	/* user data */
+};
+.Ed
+.Pp
+The kernel returns
+.Va data
+unchanged with each event of the registration.
+The
+.Va events
+field is a combination of these flags:
+.Bl -tag -width EPOLLEXCLUSIVE
+.It Dv EPOLLIN
+The descriptor is readable.
+.It Dv EPOLLOUT
+The descriptor is writable.
+.It Dv EPOLLRDHUP
+The peer of a socket shut down its writing side.
+.It Dv EPOLLPRI
+Out-of-band data is available.
+.It Dv EPOLLRDNORM , EPOLLRDBAND , EPOLLWRNORM , EPOLLWRBAND
+As the
+.Xr poll 2
+events of the same names.
+.It Dv EPOLLERR
+An error condition.
+It is always reported and need not be requested.
+.It Dv EPOLLHUP
+The descriptor was hung up.
+It is always reported and need not be requested.
+.It Dv EPOLLET
+Edge-triggered: report the registration once for each change of state of
+the descriptor, not for as long as it stays ready.
+.It Dv EPOLLONESHOT
+Report the registration once, then disable it until the next
+.Dv EPOLL_CTL_MOD .
+.It Dv EPOLLEXCLUSIVE
+Accepted with
+.Dv EPOLL_CTL_ADD
+only, with
+.Dv EPOLLIN ,
+.Dv EPOLLOUT ,
+.Dv EPOLLWAKEUP ,
+.Dv EPOLLET ,
+.Dv EPOLLERR
+and
+.Dv EPOLLHUP .
+All instances that watch the descriptor are woken.
+.It Dv EPOLLWAKEUP
+Accepted and ignored.
+.El
+.Pp
+Without
+.Dv EPOLLET
+and
+.Dv EPOLLONESHOT ,
+a registration is level-triggered: each wait reports it while the descriptor
+is ready.
+.Pp
+The
+.Fn epoll_pwait2
+system call waits for events of the instance
+.Fa epfd
+and stores at most
+.Fa maxevents
+of them in
+.Fa events .
+A
+.Dv NULL
+.Fa timeout
+waits without a limit; a zero
+.Fa timeout
+does not wait.
+If
+.Fa sigmask
+is not
+.Dv NULL ,
+it replaces the signal mask of the thread during the wait, as with
+.Xr ppoll 2 .
+The
+.Fn epoll_pwait
+and
+.Fn epoll_wait
+functions are the same with a
+.Fa timeout
+in milliseconds, where a negative value waits without a limit.
+.Pp
+A registration belongs to the descriptor number.
+It ends when the descriptor is closed.
+A child that
+.Xr fork 2
+creates gets a copy of the instance with copies of the registrations, except
+the registrations of other epoll instances and kqueues.
+An epoll instance can be registered in another epoll instance or in a
+kqueue.
+It is readable when one of its registrations may be ready.
+.Pp
+.Xr kevent 2
+cannot be used on an epoll instance.
+.Sh RETURN VALUES
+The
+.Fn epoll_create
+and
+.Fn epoll_create1
+functions return a new file descriptor.
+The
+.Fn epoll_ctl
+system call returns 0.
+The
+.Fn epoll_wait ,
+.Fn epoll_pwait
+and
+.Fn epoll_pwait2
+functions return the number of events stored, or 0 if the timeout expired.
+On error, \-1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+The
+.Fn epoll_create
+and
+.Fn epoll_create1
+functions fail if:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The
+.Fa size
+argument is not greater than 0, or
+.Fa flags
+has a flag other than
+.Dv EPOLL_CLOEXEC .
+.It Bq Er EMFILE
+The process has reached its limit for open file descriptors.
+.It Bq Er ENFILE
+The system file table is full.
+.It Bq Er ENOMEM
+The process has reached its limit of kqueues
+.Pq Dv RLIMIT_KQUEUES .
+.El
+.Pp
+The
+.Fn epoll_ctl
+system call fails if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+.Fa epfd
+or
+.Fa fd
+is not a valid file descriptor.
+.It Bq Er EEXIST
+.Fa op
+is
+.Dv EPOLL_CTL_ADD
+and
+.Fa fd
+is already registered.
+.It Bq Er EFAULT
+.Fa event
+points outside the address space of the process.
+.It Bq Er EINVAL
+.Fa epfd
+is not an epoll instance,
+.Fa fd
+is the same as
+.Fa epfd ,
+.Fa op
+is not valid, or
+.Dv EPOLLEXCLUSIVE
+is used with
+.Dv EPOLL_CTL_MOD ,
+on a registration that was added with it, with another event, or with a
+descriptor that is an epoll instance or a kqueue.
+.It Bq Er ELOOP
+.Fa fd
+is an epoll instance or a kqueue, and the registration would make a loop
+of instances or a chain of more than 5 instances.
+.It Bq Er ENOENT
+.Fa op
+is
+.Dv EPOLL_CTL_MOD
+or
+.Dv EPOLL_CTL_DEL
+and
+.Fa fd
+is not registered.
+.It Bq Er ENOMEM
+No memory was available for the registration.
+.It Bq Er EPERM
+.Fa fd
+refers to a regular file, a directory, or another file that cannot be
+watched.
+.It Bq Er EPIPE
+.Fa fd
+is the write end of a pipe whose read end is closed, and the events ask for
+writing.
+.El
+.Pp
+The
+.Fn epoll_wait ,
+.Fn epoll_pwait
+and
+.Fn epoll_pwait2
+functions fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+.Fa epfd
+is not a valid file descriptor.
+.It Bq Er EFAULT
+.Fa events ,
+.Fa timeout
+or
+.Fa sigmask
+points outside the address space of the process.
+.It Bq Er EINTR
+A signal was delivered before an event or the end of the timeout.
+The call is not restarted.
+.It Bq Er EINVAL
+.Fa epfd
+is not an epoll instance,
+.Fa maxevents
+is not greater than 0 or is too large, or
+.Fa timeout
+is not a valid time.
+.El
+.Sh SEE ALSO
+.Xr kevent 2 ,
+.Xr kqueue 2 ,
+.Xr poll 2 ,
+.Xr ppoll 2 ,
+.Xr select 2
+.Sh STANDARDS
+These functions are non-standard.
+They are present in Linux.
+.Sh HISTORY
+These functions first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
+.Sh BUGS
+A registration ends when its descriptor number is closed, even if another
+descriptor of the same open file stays open.
+An epoll instance is copied, not shared, by
+.Xr fork 2 ,
+and cannot be passed with
+.Dv SCM_RIGHTS .
+The functions are not cancellation points.

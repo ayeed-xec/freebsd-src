@@ -3545,6 +3545,27 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 5;
 		break;
 	}
+	/* epoll_ctl */
+	case 610: {
+		struct epoll_ctl_args *p = params;
+		iarg[a++] = p->epfd; /* int */
+		iarg[a++] = p->op; /* int */
+		iarg[a++] = p->fd; /* int */
+		uarg[a++] = (intptr_t)p->event; /* struct epoll_event * */
+		*n_args = 4;
+		break;
+	}
+	/* epoll_pwait2 */
+	case 611: {
+		struct epoll_pwait2_args *p = params;
+		iarg[a++] = p->epfd; /* int */
+		uarg[a++] = (intptr_t)p->events; /* struct epoll_event * */
+		iarg[a++] = p->maxevents; /* int */
+		uarg[a++] = (intptr_t)p->timeout; /* const struct timespec * */
+		uarg[a++] = (intptr_t)p->sigmask; /* const sigset_t * */
+		*n_args = 5;
+		break;
+	}
 	default:
 		*n_args = 0;
 		break;
@@ -9492,6 +9513,47 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* epoll_ctl */
+	case 610:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "userland struct epoll_event *";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* epoll_pwait2 */
+	case 611:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "userland struct epoll_event *";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "userland const struct timespec *";
+			break;
+		case 4:
+			p = "userland const sigset_t *";
+			break;
+		default:
+			break;
+		};
+		break;
 	default:
 		break;
 	};
@@ -11512,6 +11574,16 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 	/* renameat2 */
 	case 602:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* epoll_ctl */
+	case 610:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* epoll_pwait2 */
+	case 611:
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;

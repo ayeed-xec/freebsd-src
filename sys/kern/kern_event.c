@@ -42,6 +42,7 @@
 #include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/sx.h>
 #include <sys/proc.h>
 #include <sys/malloc.h>
 #include <sys/unistd.h>
@@ -57,6 +58,7 @@
 #include <sys/queue.h>
 #include <sys/event.h>
 #include <sys/eventvar.h>
+#include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/protosw.h>
 #include <sys/resourcevar.h>
@@ -121,6 +123,7 @@ static int	kqueue_scan(struct kqueue *kq, int maxevents,
 		    const struct timespec *timeout,
 		    struct kevent *keva, struct thread *td);
 static void 	kqueue_wakeup(struct kqueue *kq);
+static void	kqueue_epoll_init(struct kqueue *kq);
 static const struct filterops *kqueue_fo_find(int filt);
 static void	kqueue_fo_release(int filt);
 struct g_kevent_args;
@@ -1538,7 +1541,12 @@ kern_kevent_fp(struct thread *td, struct file *fp, int nchanges, int nevents,
 	error = kqueue_acquire(fp, &kq);
 	if (error != 0)
 		return (error);
-	error = kqueue_kevent(kq, td, nchanges, nevents, k_ops, timeout);
+	/* An epoll(2) instance is changed and read only by the epoll calls. */
+	if ((kq->kq_state & KQ_EPOLL) != 0)
+		error = EINVAL;
+	else
+		error = kqueue_kevent(kq, td, nchanges, nevents, k_ops,
+		    timeout);
 	kqueue_release(kq, 0);
 	return (error);
 }
@@ -2471,6 +2479,8 @@ kqueue_destroy(struct kqueue *kq)
 	seldrain(&kq->kq_sel);
 	knlist_destroy(&kq->kq_sel.si_note);
 	mtx_destroy(&kq->kq_lock);
+	if ((kq->kq_state & KQ_EPOLL) != 0)
+		sx_destroy(&kq->kq_epoll_sx);
 
 	if (kq->kq_knhash != NULL)
 		free(kq->kq_knhash, M_KQUEUE);
@@ -3038,7 +3048,10 @@ kqfd_register(int fd, struct kevent *kev, struct thread *td, int mflag)
 	if ((error = kqueue_acquire(fp, &kq)) != 0)
 		goto noacquire;
 
-	error = kqueue_register(kq, kev, td, mflag);
+	if ((kq->kq_state & KQ_EPOLL) != 0)
+		error = EINVAL;
+	else
+		error = kqueue_register(kq, kev, td, mflag);
 	kqueue_release(kq, 0);
 
 noacquire:
@@ -3062,6 +3075,8 @@ kqueue_fork_alloc(struct filedesc *fdp, struct file *fp, struct file **fp1,
 		return (error);
 	error = kern_kqueue_alloc(td, fdp, NULL, fp1, 0, NULL, true, &kq1);
 	if (error == 0) {
+		if ((kq->kq_state & KQ_EPOLL) != 0)
+			kqueue_epoll_init(kq1);
 		kq1->kq_forksrc = kq;
 		(*fp1)->f_flag = fp->f_flag & (FREAD | FWRITE | FEXEC |
 		    O_CLOEXEC | O_CLOFORK);
@@ -3459,3 +3474,415 @@ out1:
 static SYSCTL_NODE(_kern_proc, KERN_PROC_KQUEUE, kq,
     CTLFLAG_RD | CTLFLAG_MPSAFE,
     sysctl_kern_proc_kqueue, "KQueue events");
+
+/*
+ * epoll(2) instances.  An instance is a kqueue with KQ_EPOLL set, which
+ * kevent(2) refuses.  A registration of a descriptor is an EVFILT_READ
+ * knote, an EVFILT_WRITE knote, or both.  Each knote keeps the requested
+ * epoll events in ext[2] and the user data in ext[3].  The knotes only tell
+ * the scan which files to look at: the reported events come from the poll
+ * method of the file, so a registration gives one event with all its bits.
+ */
+
+static void
+kqueue_epoll_init(struct kqueue *kq)
+{
+
+	kq->kq_state |= KQ_EPOLL;
+	sx_init(&kq->kq_epoll_sx, "epollctl");
+}
+
+int
+kqueue_epoll_alloc(struct thread *td, struct file *fp)
+{
+	struct filedesc *fdp;
+	struct kqueue *kq;
+	struct ucred *cred;
+
+	cred = td->td_ucred;
+	if (!chgkqcnt(cred->cr_ruidinfo, 1, lim_cur(td, RLIMIT_KQUEUES)))
+		return (ENOMEM);
+
+	fdp = td->td_proc->p_fd;
+	kq = malloc(sizeof(*kq), M_KQUEUE, M_WAITOK | M_ZERO);
+	kqueue_init(kq, true);
+	kqueue_epoll_init(kq);
+	kq->kq_fdp = fdp;
+	kq->kq_cred = crhold(cred);
+
+	FILEDESC_XLOCK(fdp);
+	TAILQ_INSERT_HEAD(&fdp->fd_kqlist, kq, kq_list);
+	FILEDESC_XUNLOCK(fdp);
+
+	finit(fp, FREAD | FWRITE, DTYPE_KQUEUE, kq, &kqueueops);
+	return (0);
+}
+
+int
+kqueue_epoll_acquire(struct file *fp, struct kqueue **kqp)
+{
+	struct kqueue *kq;
+	int error;
+
+	error = kqueue_acquire(fp, &kq);
+	if (error != 0)
+		return (error);
+	if ((kq->kq_state & KQ_EPOLL) == 0) {
+		kqueue_release(kq, 0);
+		return (EINVAL);
+	}
+	*kqp = kq;
+	return (0);
+}
+
+void
+kqueue_epoll_release(struct kqueue *kq)
+{
+
+	kqueue_release(kq, 0);
+}
+
+int
+kqueue_epoll_register(struct kqueue *kq, struct kevent *kev,
+    struct thread *td)
+{
+
+	MPASS((kq->kq_state & KQ_EPOLL) != 0);
+	return (kqueue_register(kq, kev, td, M_WAITOK));
+}
+
+/*
+ * Return true if fd has a registration, and its requested events.
+ */
+bool
+kqueue_epoll_lookup(struct kqueue *kq, int fd, uint64_t *eventsp)
+{
+	struct knote *kn;
+	bool found;
+
+	found = false;
+	KQ_LOCK(kq);
+	if (fd >= 0 && fd < kq->kq_knlistsize) {
+		kn = SLIST_FIRST(&kq->kq_knlist[fd]);
+		if (kn != NULL) {
+			*eventsp = kn->kn_kevent.ext[2];
+			found = true;
+		}
+	}
+	KQ_UNLOCK(kq);
+	return (found);
+}
+
+/*
+ * Copy the kqueues next to kq into a new array: the kqueues that kq watches
+ * (down) or the kqueues that watch kq (up).  The caller holds the lock of
+ * the descriptor table.  New kqueue registrations take that lock, so the
+ * set can only get smaller while the lock is held, and no kqueue of the
+ * process is freed.
+ */
+static int
+kqueue_epoll_neighbors(struct kqueue *kq, bool up, struct kqueue ***kqsp)
+{
+	struct kqueue **kqs;
+	struct knote *kn;
+	int i, n, nmax;
+
+	nmax = 0;
+	KQ_LOCK(kq);
+	if (up) {
+		SLIST_FOREACH(kn, &kq->kq_sel.si_note.kl_list, kn_selnext)
+			nmax++;
+	} else {
+		for (i = 0; i < kq->kq_knlistsize; i++)
+			SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link)
+				if ((kn->kn_status & KN_KQUEUE) != 0)
+					nmax++;
+	}
+	KQ_UNLOCK(kq);
+	if (nmax == 0) {
+		*kqsp = NULL;
+		return (0);
+	}
+
+	kqs = malloc(nmax * sizeof(*kqs), M_TEMP, M_WAITOK);
+	n = 0;
+	KQ_LOCK(kq);
+	if (up) {
+		SLIST_FOREACH(kn, &kq->kq_sel.si_note.kl_list, kn_selnext) {
+			if (n == nmax)
+				break;
+			kqs[n++] = kn->kn_kq;
+		}
+	} else {
+		for (i = 0; i < kq->kq_knlistsize && n < nmax; i++) {
+			SLIST_FOREACH(kn, &kq->kq_knlist[i], kn_link) {
+				if ((kn->kn_status & KN_KQUEUE) == 0)
+					continue;
+				if (n == nmax)
+					break;
+				kqs[n++] = kn->kn_fp->f_data;
+			}
+		}
+	}
+	KQ_UNLOCK(kq);
+	*kqsp = kqs;
+	return (n);
+}
+
+/*
+ * Return the length of the longest chain of kqueues from kq, up or down,
+ * that counts kq.  The walk stops past EPOLL_MAX_NESTS, so a loop of plain
+ * kqueues cannot keep it going.  A walk down sets *foundp when it reaches
+ * target.
+ */
+static int
+kqueue_epoll_depth(struct kqueue *kq, struct kqueue *target, bool up,
+    int level, bool *foundp)
+{
+	struct kqueue **kqs;
+	int depth, i, n;
+
+	if (kq == target) {
+		*foundp = true;
+		return (level);
+	}
+	if (level > EPOLL_MAX_NESTS)
+		return (level);
+	n = kqueue_epoll_neighbors(kq, up, &kqs);
+	depth = level;
+	for (i = 0; i < n && !*foundp; i++)
+		depth = MAX(depth, kqueue_epoll_depth(kqs[i], target, up,
+		    level + 1, foundp));
+	free(kqs, M_TEMP);
+	return (depth);
+}
+
+/*
+ * Check that a registration of fp in kq makes no loop of kqueues and no
+ * chain longer than EPOLL_MAX_NESTS.
+ */
+int
+kqueue_epoll_check_nest(struct kqueue *kq, struct file *fp,
+    struct thread *td)
+{
+	struct filedesc *fdp;
+	int down, up;
+	bool found;
+
+	if (fp->f_type != DTYPE_KQUEUE)
+		return (0);
+
+	fdp = td->td_proc->p_fd;
+	found = false;
+	FILEDESC_XLOCK(fdp);
+	up = kqueue_epoll_depth(kq, NULL, true, 1, &found);
+	down = kqueue_epoll_depth(fp->f_data, kq, false, 1, &found);
+	FILEDESC_XUNLOCK(fdp);
+	if (found || up + down > EPOLL_MAX_NESTS)
+		return (ELOOP);
+	return (0);
+}
+
+/*
+ * Return the other knote of the registration of kn, if there is one.
+ */
+static struct knote *
+kqueue_epoll_sibling(struct kqueue *kq, struct knote *kn)
+{
+	struct knote *sib;
+
+	KQ_OWNED(kq);
+	SLIST_FOREACH(sib, &kq->kq_knlist[kn->kn_id], kn_link) {
+		if (sib != kn)
+			return (sib);
+	}
+	return (NULL);
+}
+
+/*
+ * Take a knote off the queue for a scan.  It stays in flux with KN_SCAN set,
+ * so knote() still runs its filter and puts it back on the queue for a new
+ * activation.
+ */
+static void
+kqueue_epoll_take(struct kqueue *kq, struct knote *kn)
+{
+
+	KQ_OWNED(kq);
+	if ((kn->kn_status & KN_QUEUED) != 0) {
+		TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
+		kn->kn_status &= ~KN_QUEUED;
+		kq->kq_count--;
+	}
+	kn->kn_status |= KN_SCAN;
+	kn_enter_flux(kn);
+}
+
+/*
+ * Finish the scan of a knote.  A level-triggered registration that was
+ * reported stays on the queue through its first knote.  A knote that
+ * knote() put on the queue during the scan keeps that activation.
+ */
+static void
+kqueue_epoll_settle(struct kqueue *kq, struct knote *kn, bool reported,
+    bool first)
+{
+
+	KQ_OWNED(kq);
+	if (reported && (kn->kn_flags & EV_DISPATCH) != 0) {
+		kn->kn_status |= KN_DISABLED;
+		kn->kn_status &= ~KN_ACTIVE;
+	} else if (reported && first && (kn->kn_flags & EV_CLEAR) == 0) {
+		if ((kn->kn_status & KN_QUEUED) == 0) {
+			TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
+			kn->kn_status |= KN_QUEUED;
+			kq->kq_count++;
+		}
+		kn->kn_status |= KN_ACTIVE;
+	} else if ((kn->kn_status & KN_QUEUED) == 0) {
+		kn->kn_status &= ~KN_ACTIVE;
+	}
+	kn->kn_status &= ~KN_SCAN;
+	kn_leave_flux(kn);
+}
+
+/*
+ * The epoll(2) counterpart of kqueue_scan().  It returns at most one event
+ * for each registration.  A registration whose poll result is empty is not
+ * counted, and the scan waits again if nothing was reported.
+ */
+int
+kqueue_epoll_scan(struct kqueue *kq, int maxevents,
+    kqueue_epoll_copyout_t *copyout, void *arg, const struct timespec *tsp,
+    struct thread *td)
+{
+	struct epoll_event eva[KQ_NEVENTS];
+	struct knote *kn, *marker, *sib;
+	sbintime_t asbt, rsbt;
+	uint32_t revents;
+	int count, error, influx, nev;
+
+	MPASS((kq->kq_state & KQ_EPOLL) != 0);
+	MPASS(maxevents > 0);
+	count = maxevents;
+	nev = 0;
+	error = 0;
+
+	rsbt = 0;
+	if (tsp != NULL) {
+		if (!timespecvalid_interval(tsp)) {
+			error = EINVAL;
+			goto done_nl;
+		}
+		if (timespecisset(tsp)) {
+			if (tsp->tv_sec <= INT32_MAX) {
+				rsbt = tstosbt(*tsp);
+				if (TIMESEL(&asbt, rsbt))
+					asbt += tc_tick_sbt;
+				if (asbt <= SBT_MAX - rsbt)
+					asbt += rsbt;
+				else
+					asbt = 0;
+				rsbt >>= tc_precexp;
+			} else
+				asbt = 0;
+		} else
+			asbt = -1;
+	} else
+		asbt = 0;
+	marker = knote_alloc(M_WAITOK);
+	marker->kn_status = KN_MARKER;
+	KQ_LOCK(kq);
+
+retry:
+	if (kq->kq_count == 0) {
+		if (asbt == -1) {
+			error = EWOULDBLOCK;
+		} else {
+			kq->kq_state |= KQ_SLEEP;
+			error = msleep_sbt(kq, &kq->kq_lock, PSOCK | PCATCH,
+			    "epollwt", asbt, rsbt, C_ABSOLUTE);
+		}
+		if (error == 0)
+			goto retry;
+		/* don't restart after signals... */
+		if (error == ERESTART)
+			error = EINTR;
+		else if (error == EWOULDBLOCK)
+			error = 0;
+		goto done;
+	}
+
+	TAILQ_INSERT_TAIL(&kq->kq_head, marker, kn_tqe);
+	influx = 0;
+	while (count > 0) {
+		KQ_OWNED(kq);
+		kn = TAILQ_FIRST(&kq->kq_head);
+		sib = NULL;
+		if ((kn->kn_status & KN_MARKER) == 0)
+			sib = kqueue_epoll_sibling(kq, kn);
+		if ((kn->kn_status == KN_MARKER && kn != marker) ||
+		    kn_in_flux(kn) || (sib != NULL && kn_in_flux(sib))) {
+			if (influx) {
+				influx = 0;
+				KQ_FLUX_WAKEUP(kq);
+			}
+			kq->kq_state |= KQ_FLUXWAIT;
+			msleep(kq, &kq->kq_lock, PSOCK, "kqflxwt", 0);
+			continue;
+		}
+
+		if (kn == marker) {
+			TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
+			KQ_FLUX_WAKEUP(kq);
+			if (count == maxevents)
+				goto retry;
+			goto done;
+		}
+		if ((kn->kn_status & KN_DISABLED) != 0) {
+			TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
+			kn->kn_status &= ~KN_QUEUED;
+			kq->kq_count--;
+			continue;
+		}
+
+		kqueue_epoll_take(kq, kn);
+		if (sib != NULL)
+			kqueue_epoll_take(kq, sib);
+		KQ_UNLOCK(kq);
+		revents = epoll_poll_events(kn->kn_fp,
+		    (uint32_t)kn->kn_kevent.ext[2], td);
+		KQ_LOCK(kq);
+		if (revents != 0) {
+			eva[nev].events = revents;
+			eva[nev].data.u64 = kn->kn_kevent.ext[3];
+			nev++;
+			count--;
+		}
+		kqueue_epoll_settle(kq, kn, revents != 0, true);
+		if (sib != NULL)
+			kqueue_epoll_settle(kq, sib, revents != 0, false);
+		influx = 1;
+
+		if (nev == KQ_NEVENTS) {
+			influx = 0;
+			KQ_UNLOCK_FLUX(kq);
+			error = copyout(arg, eva, nev);
+			nev = 0;
+			KQ_LOCK(kq);
+			if (error != 0)
+				break;
+		}
+	}
+	TAILQ_REMOVE(&kq->kq_head, marker, kn_tqe);
+done:
+	KQ_OWNED(kq);
+	KQ_UNLOCK_FLUX(kq);
+	knote_free(marker);
+done_nl:
+	KQ_NOTOWNED(kq);
+	if (nev != 0)
+		error = copyout(arg, eva, nev);
+	td->td_retval[0] = maxevents - count;
+	return (error);
+}

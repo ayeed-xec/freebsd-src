@@ -3422,4 +3422,22 @@
 		    int flags
 		);
 	}
+603-609	AUE_NULL	RESERVED
+610	AUE_NULL	STD|CAPENABLED {
+		int epoll_ctl(
+		    int epfd,
+		    int op,
+		    int fd,
+		    _In_opt_ struct epoll_event *event
+		);
+	}
+611	AUE_NULL	STD|CAPENABLED {
+		int epoll_pwait2(
+		    int epfd,
+		    _Out_writes_(maxevents) struct epoll_event *events,
+		    int maxevents,
+		    _In_opt_ _Contains_long_timet_ const struct timespec *timeout,
+		    _In_opt_ const sigset_t *sigmask
+		);
+	}
 ; vim: syntax=off

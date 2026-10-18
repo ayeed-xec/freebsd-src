@@ -608,4 +608,13 @@ const char *syscallnames[] = {
 	"pdrfork",			/* 600 = pdrfork */
 	"pdwait",			/* 601 = pdwait */
 	"renameat2",			/* 602 = renameat2 */
+	"#603",			/* 603 = reserved for local use */
+	"#604",			/* 604 = reserved for local use */
+	"#605",			/* 605 = reserved for local use */
+	"#606",			/* 606 = reserved for local use */
+	"#607",			/* 607 = reserved for local use */
+	"#608",			/* 608 = reserved for local use */
+	"#609",			/* 609 = reserved for local use */
+	"epoll_ctl",			/* 610 = epoll_ctl */
+	"epoll_pwait2",			/* 611 = epoll_pwait2 */
 };

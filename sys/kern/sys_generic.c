@@ -54,6 +54,7 @@
 #include <sys/protosw.h>
 #include <sys/socketvar.h>
 #include <sys/uio.h>
+#include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
@@ -977,6 +978,15 @@ kern_specialfd(struct thread *td, int type, void *arg)
 		error = inotify_create_file(td, fp, si->flags, &fflags);
 		break;
 	}
+	case SPECIALFD_EPOLL: {
+		struct specialfd_epoll *se;
+
+		se = arg;
+		if ((se->flags & EPOLL_CLOEXEC) != 0)
+			fflags |= O_CLOEXEC;
+		error = epoll_create_file(td, fp, se->flags);
+		break;
+	}
 	default:
 		error = EXTERROR(EINVAL, "invalid type", type);
 		break;
@@ -1025,6 +1035,23 @@ sys___specialfd(struct thread *td, struct __specialfd_args *args)
 		if (error != 0)
 			break;
 		error = kern_specialfd(td, args->type, &si);
+		break;
+	}
+	case SPECIALFD_EPOLL: {
+		struct specialfd_epoll se;
+
+		if (args->len != sizeof(se)) {
+			error = EXTERROR(EINVAL, "epoll params ABI");
+			break;
+		}
+		error = copyin(args->req, &se, sizeof(se));
+		if (error != 0)
+			break;
+		if ((se.flags & ~EPOLL_CLOEXEC) != 0) {
+			error = EXTERROR(EINVAL, "reserved flag");
+			break;
+		}
+		error = kern_specialfd(td, args->type, &se);
 		break;
 	}
 	default:
@@ -2114,6 +2141,30 @@ seltdclear(struct thread *td)
 	STAILQ_FOREACH_SAFE(sfp, &stp->st_selq, sf_link, sfn)
 		selfdfree(stp, sfp);
 	stp->st_flags = 0;
+}
+
+/*
+ * Poll a file once and do not record the thread on its selinfo.  The epoll
+ * scan uses this: the thread waits on a kqueue, so it needs only the
+ * current events.
+ */
+int
+poll_file_norecord(struct file *fp, int events, struct ucred *active_cred,
+    struct thread *td)
+{
+	struct seltd *stp;
+	int revents;
+
+	seltdinit(td);
+	stp = td->td_sel;
+	mtx_lock(&stp->st_mtx);
+	stp->st_flags |= SELTD_RESCAN;
+	mtx_unlock(&stp->st_mtx);
+	revents = fo_poll(fp, events, active_cred, td);
+	mtx_lock(&stp->st_mtx);
+	stp->st_flags = 0;
+	mtx_unlock(&stp->st_mtx);
+	return (revents);
 }
 
 static void selectinit(void *);

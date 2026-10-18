@@ -31,6 +31,7 @@
 enum specialfd_type {
 	SPECIALFD_EVENTFD	  = 1,
 	SPECIALFD_INOTIFY	  = 2,
+	SPECIALFD_EPOLL		  = 3,
 };
 
 struct specialfd_eventfd {
@@ -39,6 +40,10 @@ struct specialfd_eventfd {
 };
 
 struct specialfd_inotify {
+	int flags;
+};
+
+struct specialfd_epoll {
 	int flags;
 };
 

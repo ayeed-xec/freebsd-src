@@ -43,6 +43,7 @@ SRCS+= \
 	drand48.c \
 	dup3.c \
 	elf_utils.c \
+	epoll.c \
 	erand48.c \
 	err.c \
 	errlst.c \

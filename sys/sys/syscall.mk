@@ -443,4 +443,6 @@ MIASM =  \
 	jail_remove_jd.o \
 	pdrfork.o \
 	pdwait.o \
-	renameat2.o
+	renameat2.o \
+	epoll_ctl.o \
+	epoll_pwait2.o
