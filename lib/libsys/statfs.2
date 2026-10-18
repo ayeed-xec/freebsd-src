@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd July 20, 2025
+.Dd October 18, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -181,6 +181,36 @@ The
 system call
 returns the same information about an open file referenced by descriptor
 .Fa fd .
+.Pp
+If
+.Fa fd
+references a shared memory object
+.Po
+see
+.Xr shm_open 2
+and
+.Xr memfd_create 3
+.Pc ,
+.Fn fstatfs
+describes the shared memory objects, which are not on a mounted
+file system:
+.Va f_fstypename
+and
+.Va f_mntfromname
+are
+.Dq shm ,
+.Va f_mntonname
+is empty,
+.Va f_flags
+is
+.Dv MNT_LOCAL ,
+.Va f_bsize
+is the page size of the object,
+.Va f_fsid
+holds the device number that
+.Xr fstat 2
+reports for the object,
+and the block and file counts are zero.
 .Sh RETURN VALUES
 .Rv -std
 .Sh ERRORS
@@ -235,6 +265,11 @@ The
 .Fa fd
 argument
 is not a valid open file descriptor.
+.It Bq Er EINVAL
+The
+.Fa fd
+argument references neither a file on a file system nor a shared
+memory object.
 .It Bq Er EFAULT
 The
 .Fa buf
@@ -264,6 +299,8 @@ each file or directory name or disk label
 .Sh SEE ALSO
 .Xr fhstatfs 2 ,
 .Xr getfsstat 2 ,
+.Xr shm_open 2 ,
+.Xr memfd_create 3 ,
 .Xr named_attribute 7
 .Sh HISTORY
 The

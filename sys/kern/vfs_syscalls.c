@@ -60,6 +60,7 @@
 #include <sys/limits.h>
 #include <sys/linker.h>
 #include <sys/malloc.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
@@ -426,9 +427,19 @@ kern_fstatfs(struct thread *td, int fd, struct statfs *buf)
 	int error;
 
 	AUDIT_ARG_FD(fd);
-	error = getvnode_path(td, fd, &cap_fstatfs_rights, NULL, &fp);
+	error = fget_unlocked_flags(td, fd, &cap_fstatfs_rights, NULL, &fp);
 	if (error != 0)
 		return (error);
+	if (fp->f_type == DTYPE_SHM) {
+		error = shm_statfs(fp, buf, td->td_ucred);
+		fdrop(fp, td);
+		return (error);
+	}
+	/* The checks of getvnode_path(). */
+	if (__predict_false(fp->f_vnode == NULL || fp->f_ops == &badfileops)) {
+		fdrop(fp, td);
+		return (EINVAL);
+	}
 	vp = fp->f_vnode;
 #ifdef AUDIT
 	if (AUDITING_TD(td)) {

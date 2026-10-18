@@ -68,6 +68,7 @@
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
@@ -717,6 +718,40 @@ shm_stat(struct file *fp, struct stat *sb, struct ucred *active_cred)
 		sb->st_blocks = shmfd->shm_pages;
 	}
 
+	return (0);
+}
+
+/*
+ * fstatfs(2) on a shared memory descriptor.  The objects are not on a
+ * mounted filesystem and have no fixed capacity, so the counts are zero.
+ * The type name lets a caller tell such a descriptor from a file.
+ */
+int
+shm_statfs(struct file *fp, struct statfs *sfp, struct ucred *active_cred)
+{
+	struct shmfd *shmfd;
+#ifdef MAC
+	int error;
+#endif
+
+	shmfd = fp->f_data;
+#ifdef MAC
+	error = mac_posixshm_check_stat(active_cred, fp->f_cred, shmfd);
+	if (error != 0)
+		return (error);
+#endif
+	bzero(sfp, sizeof(*sfp));
+	sfp->f_version = STATFS_VERSION;
+	sfp->f_flags = MNT_LOCAL;
+	if (shm_largepage(shmfd))
+		sfp->f_bsize = pagesizes[shmfd->shm_lp_psind];
+	else
+		sfp->f_bsize = PAGE_SIZE;
+	sfp->f_iosize = PAGE_SIZE;
+	sfp->f_namemax = NAME_MAX;
+	sfp->f_fsid.val[0] = (int32_t)shm_dev_ino;
+	strlcpy(sfp->f_fstypename, "shm", sizeof(sfp->f_fstypename));
+	strlcpy(sfp->f_mntfromname, "shm", sizeof(sfp->f_mntfromname));
 	return (0);
 }
 
