@@ -8,6 +8,10 @@ ATF_TESTS_C+=	mlock_test \
 		shared_shadow_inval_test \
 		vm_sysinfo_test
 
+.if ${MACHINE_CPUARCH} == "aarch64"
+ATF_TESTS_C+=	mmap_bti_test
+.endif
+
 BINDIR=		${TESTSDIR}
 ATF_TESTS_SH+=	mmap_map_32bit_test
 PROGS+=		mmap_map_32bit_helper

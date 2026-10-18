@@ -55,6 +55,9 @@
 #if __BSD_VISIBLE
 #define	PROT_CHERI0	0x08
 #define	PROT_CHERI1	0x10
+#ifdef __aarch64__
+#define	PROT_BTI	0x40	/* pages are BTI guarded pages */
+#endif
 #define	_PROT_ALL	(PROT_READ | PROT_WRITE | PROT_EXEC)
 #define	PROT_EXTRACT(prot)	((prot) & _PROT_ALL)
 

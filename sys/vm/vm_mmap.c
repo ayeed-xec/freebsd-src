@@ -174,6 +174,56 @@ kern_mmap_maxprot(struct proc *p, int prot)
 	return (_PROT_ALL);
 }
 
+/*
+ * Return the machine-dependent protection bits that the process can give to
+ * mmap(2) and mprotect(2).  PROT_BTI belongs to the 64-bit FreeBSD ABI on
+ * arm64.  Other processes get EINVAL for it, as for any unknown bit.
+ */
+static int
+vm_mmap_md_prot_mask(struct proc *p __unused)
+{
+#ifdef PROT_BTI
+	if (SV_PROC_ABI(p) == SV_ABI_FREEBSD && SV_PROC_FLAG(p, SV_LP64) != 0)
+		return (PROT_BTI);
+#endif
+	return (0);
+}
+
+/*
+ * Apply the machine-dependent protection bits to the mapped part of
+ * [start, end).  Holes and guard entries are skipped, so that a later
+ * mapping there does not get the bits.  The map lock keeps the entries in
+ * place while the pmap records the ranges.
+ */
+static int
+vm_mmap_md_prot(vm_map_t map __unused, vm_offset_t start __unused,
+    vm_offset_t end __unused, int md_prot __unused)
+{
+#ifdef PROT_BTI
+	vm_map_entry_t entry;
+	int error;
+
+	if ((md_prot & PROT_BTI) == 0 || start >= end)
+		return (0);
+	error = 0;
+	vm_map_lock_read(map);
+	if (!vm_map_lookup_entry(map, start, &entry))
+		entry = vm_map_entry_succ(entry);
+	for (; entry->start < end; entry = vm_map_entry_succ(entry)) {
+		if ((entry->eflags & MAP_ENTRY_GUARD) != 0)
+			continue;
+		error = pmap_bti_set(vm_map_pmap(map), MAX(entry->start, start),
+		    MIN(entry->end, end));
+		if (error != 0)
+			break;
+	}
+	vm_map_unlock_read(map);
+	return (error);
+#else
+	return (0);
+#endif
+}
+
 int
 kern_mmap(struct thread *td, const struct mmap_req *mrp)
 {
@@ -184,7 +234,7 @@ kern_mmap(struct thread *td, const struct mmap_req *mrp)
 	vm_offset_t addr, orig_addr;
 	vm_size_t len, pageoff, size;
 	vm_prot_t cap_maxprot;
-	int align, error, fd, flags, max_prot, prot;
+	int align, error, fd, flags, max_prot, md_prot, prot;
 	cap_rights_t rights;
 	mmap_check_fp_fn check_fp_fn;
 
@@ -196,9 +246,11 @@ kern_mmap(struct thread *td, const struct mmap_req *mrp)
 	pos = mrp->mr_pos;
 	check_fp_fn = mrp->mr_check_fp_fn;
 
-	if ((prot & ~(_PROT_ALL | PROT_MAX(_PROT_ALL))) != 0) {
+	if ((prot & ~(_PROT_ALL | vm_mmap_md_prot_mask(td->td_proc) |
+	    PROT_MAX(_PROT_ALL))) != 0) {
 		return (EXTERROR(EINVAL, "unknown PROT bits %#jx", prot));
 	}
+	md_prot = prot & ~(_PROT_ALL | PROT_MAX(_PROT_ALL));
 	max_prot = PROT_MAX_EXTRACT(prot);
 	prot = PROT_EXTRACT(prot);
 	if (max_prot != 0 && (max_prot & prot) != prot) {
@@ -275,9 +327,9 @@ kern_mmap(struct thread *td, const struct mmap_req *mrp)
 		return (EXTERROR(EINVAL,
 		    "both SHARED and PRIVATE set (flags %#jx)", flags));
 	}
-	if ((flags & MAP_GUARD) != 0 && (prot != PROT_NONE || fd != -1 ||
-	    pos != 0 || (flags & ~(MAP_FIXED | MAP_GUARD | MAP_EXCL |
-	    MAP_32BIT | MAP_ALIGNMENT_MASK)) != 0)) {
+	if ((flags & MAP_GUARD) != 0 && (prot != PROT_NONE || md_prot != 0 ||
+	    fd != -1 || pos != 0 || (flags & ~(MAP_FIXED | MAP_GUARD |
+	    MAP_EXCL | MAP_32BIT | MAP_ALIGNMENT_MASK)) != 0)) {
 		return (EXTERROR(EINVAL, "GUARD with wrong parameters"));
 	}
 
@@ -418,6 +470,12 @@ kern_mmap(struct thread *td, const struct mmap_req *mrp)
 		    max_prot & cap_maxprot, flags, pos, td);
 	}
 
+	if (error == 0 && md_prot != 0) {
+		error = vm_mmap_md_prot(&vms->vm_map, addr, addr + size,
+		    md_prot);
+		if (error != 0)
+			(void)vm_map_remove(&vms->vm_map, addr, addr + size);
+	}
 	if (error == 0)
 		td->td_retval[0] = addr + pageoff;
 done:
@@ -676,11 +734,13 @@ kern_mprotect(struct thread *td, uintptr_t addr0, size_t size, int prot,
 {
 	vm_offset_t addr;
 	vm_size_t pageoff;
-	int vm_error, max_prot;
+	int vm_error, max_prot, md_prot;
 
 	addr = addr0;
-	if ((prot & ~(_PROT_ALL | PROT_MAX(_PROT_ALL))) != 0)
+	if ((prot & ~(_PROT_ALL | vm_mmap_md_prot_mask(td->td_proc) |
+	    PROT_MAX(_PROT_ALL))) != 0)
 		return (EINVAL);
+	md_prot = prot & ~(_PROT_ALL | PROT_MAX(_PROT_ALL));
 	max_prot = PROT_MAX_EXTRACT(prot);
 	prot = PROT_EXTRACT(prot);
 	pageoff = (addr & PAGE_MASK);
@@ -704,7 +764,8 @@ kern_mprotect(struct thread *td, uintptr_t addr0, size_t size, int prot,
 
 	switch (vm_error) {
 	case KERN_SUCCESS:
-		return (0);
+		return (vm_mmap_md_prot(&td->td_proc->p_vmspace->vm_map, addr,
+		    addr + size, md_prot));
 	case KERN_PROTECTION_FAILURE:
 		return (EACCES);
 	case KERN_RESOURCE_SHORTAGE:
