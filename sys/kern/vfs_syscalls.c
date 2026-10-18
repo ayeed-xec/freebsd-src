@@ -212,6 +212,14 @@ kern_syncfs(struct thread *td, int fd)
 			save = curthread_pflags_set(TDP_SYNCIO);
 			vfs_periodic(mp, MNT_WAIT);
 			error = VFS_SYNC(mp, MNT_WAIT);
+			/*
+			 * EAGAIN means that writes started during the call
+			 * kept the file system from becoming clean.  The
+			 * writes that were pending when the call started are
+			 * done, and that is all that syncfs(2) promises.
+			 */
+			if (error == EAGAIN)
+				error = 0;
 			curthread_pflags_restore(save);
 			vn_finished_write(mp);
 		}
