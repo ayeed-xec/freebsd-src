@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd October 31, 2024
+.Dd October 18, 2026
 .Dt UNIX 4
 .Os
 .Sh NAME
@@ -390,6 +390,53 @@ To reliably obtain peer credentials on a
 socket refer to the
 .Dv LOCAL_CREDS
 socket option.
+.El
+.Sh RECORD BOUNDARIES
+A
+.Dv SOCK_SEQPACKET
+socket ends a record where the sender gives
+.Dv MSG_EOR .
+A socket made with the
+.Dv SOCK_ATOMIC
+flag of
+.Xr socket 2
+or
+.Xr socketpair 2
+has these rules instead, which other systems use for
+.Dv SOCK_SEQPACKET :
+.Bl -bullet
+.It
+Each output operation sends one record.
+The record goes into the receive buffer of the peer as a whole, with its
+control messages, or nothing is sent.
+A record larger than the send buffer or than the receive buffer of the peer
+gives
+.Er EMSGSIZE .
+If the receive buffer has no room for the record, a blocking send waits and
+a non-blocking send gives
+.Er EAGAIN .
+An output operation with no data and no control messages sends nothing.
+.It
+An input operation returns data of one record only and sets
+.Dv MSG_EOR .
+If the record is longer than the buffer, the rest of the record is
+discarded and
+.Dv MSG_TRUNC
+is set.
+With the
+.Dv MSG_TRUNC
+flag, the operation returns the length of the whole record.
+With
+.Dv MSG_PEEK ,
+the record stays in the buffer.
+.It
+A socket that
+.Xr accept 2
+returns has the mode of the listening socket.
+.Xr connect 2
+gives
+.Er EPROTOTYPE
+if one of the two sockets has the mode and the other does not.
 .El
 .Sh BUFFERING
 Due to the local nature of the

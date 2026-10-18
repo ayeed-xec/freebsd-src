@@ -142,6 +142,7 @@ kern_socket(struct thread *td, int domain, int type, int protocol)
 	struct socket *so;
 	struct file *fp;
 	int fd, error, oflag, fflag;
+	bool atomic;
 
 	AUDIT_ARG_SOCKET(domain, type, protocol);
 
@@ -159,6 +160,12 @@ kern_socket(struct thread *td, int domain, int type, int protocol)
 		type &= ~SOCK_NONBLOCK;
 		fflag |= FNONBLOCK;
 	}
+	atomic = (type & SOCK_ATOMIC) != 0;
+	if (atomic) {
+		type &= ~SOCK_ATOMIC;
+		if (domain != PF_LOCAL || type != SOCK_SEQPACKET)
+			return (EPROTOTYPE);
+	}
 
 #ifdef MAC
 	error = mac_socket_check_create(td->td_ucred, domain, type, protocol);
@@ -173,6 +180,8 @@ kern_socket(struct thread *td, int domain, int type, int protocol)
 	if (error != 0) {
 		fdclose(td, fp, fd);
 	} else {
+		if (atomic)
+			unp_set_atomic(so);
 		finit(fp, FREAD | FWRITE | fflag, DTYPE_SOCKET, so, &socketops);
 		if ((fflag & FNONBLOCK) != 0)
 			(void) fo_ioctl(fp, FIONBIO, &fflag, td->td_ucred, td);
@@ -553,6 +562,7 @@ kern_socketpair(struct thread *td, int domain, int type, int protocol,
 	struct file *fp1, *fp2;
 	struct socket *so1, *so2;
 	int fd, error, oflag, fflag;
+	bool atomic;
 
 	AUDIT_ARG_SOCKET(domain, type, protocol);
 
@@ -570,6 +580,12 @@ kern_socketpair(struct thread *td, int domain, int type, int protocol,
 		type &= ~SOCK_NONBLOCK;
 		fflag |= FNONBLOCK;
 	}
+	atomic = (type & SOCK_ATOMIC) != 0;
+	if (atomic) {
+		type &= ~SOCK_ATOMIC;
+		if (domain != PF_LOCAL || type != SOCK_SEQPACKET)
+			return (EPROTOTYPE);
+	}
 #ifdef MAC
 	/* We might want to have a separate check for socket pairs. */
 	error = mac_socket_check_create(td->td_ucred, domain, type,
@@ -583,6 +599,10 @@ kern_socketpair(struct thread *td, int domain, int type, int protocol,
 	error = socreate(domain, &so2, type, protocol, td->td_ucred, td);
 	if (error != 0)
 		goto free1;
+	if (atomic) {
+		unp_set_atomic(so1);
+		unp_set_atomic(so2);
+	}
 	/* On success extra reference to `fp1' and 'fp2' is set by falloc. */
 	error = falloc(td, &fp1, &fd, oflag);
 	if (error != 0)

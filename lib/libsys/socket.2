@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd September 28, 2025
+.Dd October 18, 2026
 .Dt SOCKET 2
 .Os
 .Sh NAME
@@ -96,7 +96,8 @@ argument:
 .Bd -literal -offset indent -compact
 SOCK_CLOEXEC	Set close-on-exec on the new descriptor,
 SOCK_CLOFORK	Set close-on-fork on the new descriptor,
-SOCK_NONBLOCK	Set non-blocking mode on the new socket
+SOCK_NONBLOCK	Set non-blocking mode on the new socket,
+SOCK_ATOMIC	Send and receive whole records (PF_UNIX SOCK_SEQPACKET)
 .Ed
 .Pp
 The
@@ -262,6 +263,22 @@ flag in the received message flags returned by the
 function.
 It is protocol-specific whether a maximum record size is imposed.
 .Pp
+A
+.Dv PF_UNIX
+.Dv SOCK_SEQPACKET
+socket made with the
+.Dv SOCK_ATOMIC
+flag ends a record at the end of each output operation, and the
+operation queues the whole record at the peer or nothing.
+An input operation returns data of one record only.
+If the record is longer than the buffer, the rest of the record is
+discarded, unless
+.Dv MSG_PEEK
+is given, and
+.Dv MSG_TRUNC
+is set in the received message flags; see
+.Xr unix 4 .
+.Pp
 The
 .Dv SOCK_SEQPACKET
 socket is supported by the following protocol families:
@@ -397,6 +414,13 @@ The protocol type or the specified protocol is not supported
 within this domain.
 .It Bq Er EPROTOTYPE
 The socket type is not supported by the protocol.
+.Pp
+The
+.Dv SOCK_ATOMIC
+flag was given with a domain other than
+.Dv PF_UNIX
+or a type other than
+.Dv SOCK_SEQPACKET .
 .El
 .Sh SEE ALSO
 .Xr accept 2 ,

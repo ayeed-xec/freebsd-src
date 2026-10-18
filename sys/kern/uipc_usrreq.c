@@ -786,6 +786,8 @@ uipc_connect2(struct socket *so1, struct socket *so2)
 	KASSERT(unp != NULL, ("uipc_connect2: unp == NULL"));
 	unp2 = so2->so_pcb;
 	KASSERT(unp2 != NULL, ("uipc_connect2: unp2 == NULL"));
+	if (((unp->unp_flags ^ unp2->unp_flags) & UNP_ATOMIC) != 0)
+		return (EPROTOTYPE);
 	unp_pcb_lock_pair(unp, unp2);
 	unp_connect2(so1, so2, false);
 	unp_pcb_unlock_pair(unp, unp2);
@@ -1112,7 +1114,7 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 	struct uio *uio;
 	struct mchain mc, cmc;
 	size_t resid, sent;
-	bool nonblock, eor, aio;
+	bool nonblock, eor, aio, atomic;
 	int error;
 
 	MPASS((uio0 != NULL && m == NULL) || (m != NULL && uio0 == NULL));
@@ -1123,7 +1125,12 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 
 	nonblock = (so->so_state & SS_NBIO) ||
 	    (flags & (MSG_DONTWAIT | MSG_NBIO));
-	eor = flags & MSG_EOR;
+	/*
+	 * With SOCK_ATOMIC each send is one record: it ends with M_EOR, and it
+	 * goes to the peer as a whole or not at all.
+	 */
+	atomic = (sotounpcb(so)->unp_flags & UNP_ATOMIC) != 0;
+	eor = (flags & MSG_EOR) != 0 || atomic;
 
 	mc = MCHAIN_INITIALIZER(&mc);
 	cmc = MCHAIN_INITIALIZER(&cmc);
@@ -1157,6 +1164,10 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 			uio = uio0;
 			resid = uio->uio_resid;
 		}
+		if (atomic && uio->uio_resid > so->so_snd.sb_hiwat) {
+			error = EMSGSIZE;
+			goto out2;
+		}
 		/*
 		 * Optimization for a case when our send fits into the receive
 		 * buffer - do the copyin before taking any locks, sized to our
@@ -1167,8 +1178,29 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 		    eor ? M_EOR : 0);
 		if (__predict_false(error))
 			goto out2;
-	} else
+		if (atomic && mc.mc_len == 0) {
+			struct mbuf *em;
+
+			/*
+			 * An empty send makes a record only when it has control
+			 * messages: an empty mbuf with M_EOR ends it.
+			 */
+			if (cmc.mc_len == 0)
+				goto out2;
+			em = m_get(M_WAITOK, MT_DATA);
+			em->m_flags |= M_EOR;
+			mc_append(&mc, em);
+		}
+	} else {
 		uipc_reset_kernel_mbuf(m, &mc);
+		if (atomic) {
+			if (mc.mc_len > so->so_snd.sb_hiwat) {
+				error = EMSGSIZE;
+				goto out;
+			}
+			STAILQ_LAST(&mc.mc_q, mbuf, m_stailq)->m_flags |= M_EOR;
+		}
+	}
 
 	error = SOCK_IO_SEND_LOCK(so, SBLOCKWAIT(flags));
 	if (error)
@@ -1205,7 +1237,8 @@ uipc_sosend_stream_or_seqpacket(struct socket *so, struct sockaddr *addr,
 		SOCK_RECVBUF_LOCK(so2);
 restart:
 		UIPC_STREAM_SBCHECK(sb);
-		if (__predict_false(cmc.mc_len > sb->sb_hiwat)) {
+		if (__predict_false(cmc.mc_len > sb->sb_hiwat) ||
+		    (atomic && mc.mc_len + cmc.mc_len > sb->sb_hiwat)) {
 			SOCK_RECVBUF_UNLOCK(so2);
 			error = EMSGSIZE;
 			goto out4;
@@ -1218,10 +1251,12 @@ restart:
 		/*
 		 * Wait on the peer socket receive buffer until we have enough
 		 * space to put at least control.  The data is a stream and can
-		 * be put partially, but control is really a datagram.
+		 * be put partially, but control is really a datagram.  An
+		 * atomic record waits until all of it fits.
 		 */
 		space = uipc_stream_sbspace(sb);
-		if (space < sb->sb_lowat || space < cmc.mc_len) {
+		if (atomic ? (space < mc.mc_len + cmc.mc_len) :
+		    (space < sb->sb_lowat || space < cmc.mc_len)) {
 			if (nonblock) {
 				if (aio)
 					sb->uxst_flags |= UXST_PEER_AIO;
@@ -1244,7 +1279,7 @@ restart:
 		}
 		MPASS(space >= cmc.mc_len);
 		space -= cmc.mc_len;
-		if (space == 0) {
+		if (space == 0 && !atomic) {
 			/* There is space only to send control. */
 			MPASS(!STAILQ_EMPTY(&cmc.mc_q));
 			mcnext = mc;
@@ -1384,15 +1419,33 @@ uipc_cantrcvmore(struct socket *so)
 		SOCK_RECVBUF_UNLOCK(so);
 }
 
+/*
+ * Free the dropped end of a SOCK_ATOMIC record: the mbufs from m to end.
+ * They are off the socket buffer already.
+ */
+static void
+uipc_free_record_tail(struct mbuf *m, struct mbuf *end)
+{
+	struct mbuf *n;
+	bool last;
+
+	do {
+		n = STAILQ_NEXT(m, m_stailq);
+		last = m == end;
+		m_free(m);
+		m = n;
+	} while (!last);
+}
+
 static int
 uipc_soreceive_stream_or_seqpacket(struct socket *so, struct sockaddr **psa,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp)
 {
 	struct sockbuf *sb = &so->so_rcv;
-	struct mbuf *control, *m, *first, *part, *next;
-	u_int ctl, space, datalen, mbcnt, partlen;
+	struct mbuf *control, *m, *first, *part, *next, *trunc, *truncend;
+	u_int ctl, space, datalen, mbcnt, partlen, trunclen;
 	int error, flags;
-	bool nonblock, waitall, peek;
+	bool nonblock, waitall, peek, atomic, fulllen;
 
 	MPASS(mp0 == NULL);
 
@@ -1406,6 +1459,8 @@ uipc_soreceive_stream_or_seqpacket(struct socket *so, struct sockaddr **psa,
 	    (flags & (MSG_DONTWAIT | MSG_NBIO));
 	peek = flags & MSG_PEEK;
 	waitall = (flags & MSG_WAITALL) && !peek;
+	atomic = (sotounpcb(so)->unp_flags & UNP_ATOMIC) != 0;
+	fulllen = (flags & MSG_TRUNC) != 0;
 
 	/*
 	 * This check may fail only on a socket that never went through
@@ -1520,14 +1575,48 @@ restart:
 		next = STAILQ_NEXT(m, m_stailq);
 	}
 
+	/*
+	 * A SOCK_ATOMIC receive ends with its record.  The part of the record
+	 * that does not fit is dropped (kept with MSG_PEEK), and MSG_TRUNC
+	 * reports it.  The sender queued the whole record, so its M_EOR mbuf
+	 * is here.  'trunc' up to 'truncend' are the dropped mbufs, which
+	 * may start with 'part'.
+	 */
+	trunc = truncend = NULL;
+	trunclen = 0;
+	if (atomic && (flags & MSG_EOR) == 0) {
+		for (m = next; m != NULL && m != sb->uxst_fnrdy &&
+		    m->m_type == MT_DATA; m = STAILQ_NEXT(m, m_stailq)) {
+			if (m == part && peek)
+				trunclen += m->m_len - partlen;
+			else
+				trunclen += m->m_len;
+			if (!peek) {
+				mbcnt += MSIZE;
+				if (m->m_flags & M_EXT)
+					mbcnt += m->m_ext.ext_size;
+				if (trunc == NULL)
+					trunc = m;
+				truncend = m;
+			}
+			if (m->m_flags & M_EOR)
+				break;
+		}
+		if (!peek && truncend != NULL)
+			next = STAILQ_NEXT(truncend, m_stailq);
+		if (trunclen > 0)
+			flags |= MSG_TRUNC;
+		flags |= MSG_EOR;
+	}
+
 	if (!peek) {
 		if (next == NULL)
 			STAILQ_INIT(&sb->uxst_mbq);
 		else
 			STAILQ_FIRST(&sb->uxst_mbq) = next;
-		MPASS(sb->sb_acc >= datalen);
-		sb->sb_acc -= datalen;
-		sb->sb_ccc -= datalen;
+		MPASS(sb->sb_acc >= datalen + trunclen);
+		sb->sb_acc -= datalen + trunclen;
+		sb->sb_ccc -= datalen + trunclen;
 		MPASS(sb->sb_ctl >= ctl);
 		sb->sb_ctl -= ctl;
 		MPASS(sb->sb_mbcnt >= mbcnt);
@@ -1551,7 +1640,7 @@ restart:
 				struct socket *so2 = unp2->unp_socket;
 
 				SOCK_SENDBUF_LOCK(so2);
-				so2->so_snd.sb_ccc -= datalen;
+				so2->so_snd.sb_ccc -= datalen + trunclen;
 				sowakeup_aio(so2, SO_SND);
 				SOCK_SENDBUF_UNLOCK(so2);
 				UNP_PCB_UNLOCK(unp2);
@@ -1577,6 +1666,31 @@ restart:
 			control = m_free(control);
 			if (__predict_false(error != 0)) {
 				struct mchain cmc;
+
+				if (atomic) {
+					/*
+					 * A record never goes back in part to
+					 * the buffer: drop all of it.
+					 */
+					SOCK_IO_RECV_UNLOCK(so);
+					if (control != NULL) {
+						mc_init_m(&cmc, control);
+						unp_scan(mc_first(&cmc),
+						    unp_freerights);
+						mc_freem(&cmc);
+					}
+					m = first;
+					while (datalen > 0 && m != part) {
+						next = STAILQ_NEXT(m, m_stailq);
+						datalen -= m->m_len;
+						m_free(m);
+						m = next;
+					}
+					if (trunc != NULL)
+						uipc_free_record_tail(trunc,
+						    truncend);
+					return (error);
+				}
 
 				/*
 				 * Build an mbuf chain containing the remainder
@@ -1692,6 +1806,8 @@ restart:
 					datalen -= m->m_len;
 					m_free(m);
 				}
+			if (trunc != NULL)
+				uipc_free_record_tail(trunc, truncend);
 			SOCK_IO_RECV_UNLOCK(so);
 			return (error);
 		}
@@ -1699,6 +1815,11 @@ restart:
 		if (!peek && m != part)
 			m_free(m);
 	}
+	if (trunc != NULL)
+		uipc_free_record_tail(trunc, truncend);
+	/* With MSG_TRUNC the call returns the length of the whole record. */
+	if (atomic && fulllen)
+		uio->uio_resid -= trunclen;
 	if (waitall && !(flags & MSG_EOR) && uio->uio_resid > 0)
 		goto restart;
 	SOCK_IO_RECV_UNLOCK(so);
@@ -2989,7 +3110,8 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 		goto bad2;
 	}
 	so2 = unp2->unp_socket;
-	if (so->so_type != so2->so_type) {
+	if (so->so_type != so2->so_type ||
+	    ((unp->unp_flags ^ unp2->unp_flags) & UNP_ATOMIC) != 0) {
 		error = EPROTOTYPE;
 		goto bad2;
 	}
@@ -3008,6 +3130,8 @@ unp_connectat(int fd, struct socket *so, struct sockaddr *nam,
 		}
 		unp3 = sotounpcb(so2);
 		unp_pcb_lock_pair(unp2, unp3);
+		/* The new socket takes the record mode of the listener. */
+		unp3->unp_flags |= unp2->unp_flags & UNP_ATOMIC;
 		if (unp2->unp_addr != NULL) {
 			bcopy(unp2->unp_addr, sa, unp2->unp_addr->sun_len);
 			unp3->unp_addr = (struct sockaddr_un *) sa;
@@ -3084,6 +3208,21 @@ unp_copy_peercred(struct thread *td, struct unpcb *client_unp,
 	    sizeof(server_unp->unp_peercred));
 	server_unp->unp_flags |= UNP_HAVEPC;
 	client_unp->unp_flags |= (listen_unp->unp_flags & UNP_WANTCRED_MASK);
+}
+
+/*
+ * Give a new SOCK_SEQPACKET socket the record mode of SOCK_ATOMIC.  The
+ * socket is not visible to other threads yet.
+ */
+void
+unp_set_atomic(struct socket *so)
+{
+	struct unpcb *unp;
+
+	MPASS(so->so_proto->pr_domain == &localdomain);
+	MPASS(so->so_type == SOCK_SEQPACKET);
+	unp = sotounpcb(so);
+	unp->unp_flags |= UNP_ATOMIC;
 }
 
 /*

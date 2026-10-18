@@ -111,6 +111,13 @@ struct unpcb {
 #define	UNP_WANTCRED_MASK	(UNP_WANTCRED_ONESHOT | UNP_WANTCRED_ALWAYS)
 
 /*
+ * UNP_ATOMIC - a SOCK_SEQPACKET socket made with SOCK_ATOMIC: each send is
+ * one record, and a receive drops the part of a record that does not fit.
+ * It is set when the socket is made and does not change.
+ */
+#define	UNP_ATOMIC			0x080
+
+/*
  * These flags are used to handle non-atomicity in connect() and bind()
  * operations on a socket: in particular, to avoid races between multiple
  * threads or processes operating simultaneously on the same socket.
@@ -180,6 +187,7 @@ struct thread;
 void
 unp_copy_peercred(struct thread *td, struct unpcb *client_unp,
     struct unpcb *server_unp, struct unpcb *listen_unp);
+void	unp_set_atomic(struct socket *so);
 #endif
 
 #endif /* _SYS_UNPCB_H_ */
