@@ -4082,12 +4082,14 @@ vm_map_delete(vm_map_t map, vm_offset_t start, vm_offset_t end)
 			vm_map_entry_unwire(map, entry);
 
 		/*
-		 * Remove mappings for the pages, but only if the
-		 * mappings could exist.  For instance, it does not
-		 * make sense to call pmap_remove() for guard entries.
+		 * Remove mappings for the pages and the pmap data of the
+		 * range, but only if they could exist.  An anonymous entry
+		 * gets its object at the first fault, but the pmap can hold
+		 * data for its range before that, for example the BTI ranges
+		 * of arm64.  It does not make sense to call pmap_remove() for
+		 * guard entries.
 		 */
-		if ((entry->eflags & MAP_ENTRY_IS_SUB_MAP) != 0 ||
-		    entry->object.vm_object != NULL)
+		if ((entry->eflags & MAP_ENTRY_GUARD) == 0)
 			pmap_map_delete(map->pmap, entry->start, entry->end);
 
 		/*
