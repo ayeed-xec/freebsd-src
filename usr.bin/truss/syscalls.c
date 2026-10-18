@@ -562,6 +562,8 @@ static const struct syscall_decode decoded_syscalls[] = {
 	  .args = { { Name, 0 }, { Name, 1 } } },
 	{ .name = "symlinkat", .ret_type = 1, .nargs = 3,
 	  .args = { { Name, 0 }, { Atfd, 1 }, { Name, 2 } } },
+	{ .name = "syncfs", .ret_type = 1, .nargs = 1,
+	  .args = { { Int, 0 } } },
 	{ .name = "sysarch", .ret_type = 1, .nargs = 2,
 	  .args = { { Sysarch, 0 }, { Ptr, 1 } } },
 	{ .name = "__sysctl", .ret_type = 1, .nargs = 6,

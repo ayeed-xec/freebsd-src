@@ -1926,6 +1926,9 @@ struct renameat2_args {
 	char new_l_[PADL_(const char *)]; const char * new; char new_r_[PADR_(const char *)];
 	char flags_l_[PADL_(int)]; int flags; char flags_r_[PADR_(int)];
 };
+struct syncfs_args {
+	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
+};
 struct epoll_ctl_args {
 	char epfd_l_[PADL_(int)]; int epfd; char epfd_r_[PADR_(int)];
 	char op_l_[PADL_(int)]; int op; char op_r_[PADR_(int)];
@@ -2348,6 +2351,7 @@ int	sys_jail_remove_jd(struct thread *, struct jail_remove_jd_args *);
 int	sys_pdrfork(struct thread *, struct pdrfork_args *);
 int	sys_pdwait(struct thread *, struct pdwait_args *);
 int	sys_renameat2(struct thread *, struct renameat2_args *);
+int	sys_syncfs(struct thread *, struct syncfs_args *);
 int	sys_epoll_ctl(struct thread *, struct epoll_ctl_args *);
 int	sys_epoll_pwait2(struct thread *, struct epoll_pwait2_args *);
 
@@ -3351,6 +3355,7 @@ int	freebsd14_setgroups(struct thread *, struct freebsd14_setgroups_args *);
 #define	SYS_AUE_pdrfork	AUE_PDRFORK
 #define	SYS_AUE_pdwait	AUE_PDWAIT
 #define	SYS_AUE_renameat2	AUE_RENAMEAT
+#define	SYS_AUE_syncfs	AUE_NULL
 #define	SYS_AUE_epoll_ctl	AUE_NULL
 #define	SYS_AUE_epoll_pwait2	AUE_NULL
 

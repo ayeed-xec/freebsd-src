@@ -175,6 +175,62 @@ sys_sync(struct thread *td, struct sync_args *uap)
 }
 
 /*
+ * Sync the filesystem that holds the file of a descriptor, and wait for
+ * the writes.  A stacked vnode, such as a nullfs one, is resolved to the
+ * lowest vnode first, because the upper mount holds no data of its own.
+ */
+int
+kern_syncfs(struct thread *td, int fd)
+{
+	struct file *fp;
+	struct mount *mp, *wmp;
+	struct vnode *lvp;
+	int error, save;
+
+	AUDIT_ARG_FD(fd);
+	error = getvnode(td, fd, &cap_fsync_rights, &fp);
+	if (error != 0)
+		return (error);
+	error = VOP_GETLOWVNODE(fp->f_vnode, &lvp, FWRITE);
+	fdrop(fp, td);
+	if (error != 0)
+		return (error);
+	mp = vfs_ref_from_vp(lvp);
+	vrele(lvp);
+	if (mp == NULL)
+		return (EBADF);
+	error = vfs_busy(mp, 0);
+	vfs_rel(mp);
+	if (error != 0)
+		return (error);
+	if ((mp->mnt_flag & MNT_RDONLY) == 0) {
+		/* vn_start_write() clears the mount pointer on an error. */
+		wmp = mp;
+		error = vn_start_write(NULL, &wmp, V_WAIT | V_PCATCH);
+		if (error == 0) {
+			save = curthread_pflags_set(TDP_SYNCIO);
+			vfs_periodic(mp, MNT_WAIT);
+			error = VFS_SYNC(mp, MNT_WAIT);
+			curthread_pflags_restore(save);
+			vn_finished_write(mp);
+		}
+	}
+	vfs_unbusy(mp);
+	return (error);
+}
+
+#ifndef _SYS_SYSPROTO_H_
+struct syncfs_args {
+	int	fd;
+};
+#endif
+int
+sys_syncfs(struct thread *td, struct syncfs_args *uap)
+{
+	return (kern_syncfs(td, uap->fd));
+}
+
+/*
  * Change filesystem quotas.
  */
 #ifndef _SYS_SYSPROTO_H_

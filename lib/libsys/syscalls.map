@@ -823,6 +823,8 @@ FBSDprivate_1.0 {
 	__sys_pdwait;
 	_renameat2;
 	__sys_renameat2;
+	_syncfs;
+	__sys_syncfs;
 	_epoll_ctl;
 	__sys_epoll_ctl;
 	_epoll_pwait2;

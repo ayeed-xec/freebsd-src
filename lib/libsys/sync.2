@@ -25,18 +25,21 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd December 1, 2017
+.Dd October 18, 2026
 .Dt SYNC 2
 .Os
 .Sh NAME
-.Nm sync
-.Nd "schedule file system updates"
+.Nm sync ,
+.Nm syncfs
+.Nd "write file system updates"
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
 .In unistd.h
 .Ft void
 .Fn sync void
+.Ft int
+.Fn syncfs "int fd"
 .Sh DESCRIPTION
 The
 .Fn sync
@@ -58,15 +61,84 @@ The
 system call
 may be used to synchronize individual file descriptor
 attributes.
+.Pp
+The
+.Fn syncfs
+system call writes the dirty data and metadata of the file system
+that contains the file referenced by
+.Fa fd
+to stable storage, and waits for the writes to complete.
+The descriptor may reference any file or directory on the file system,
+and it may be open for reading only.
+Dirty pages of memory-mapped files on the file system are written first.
+If the file is on a
+.Xr nullfs 4
+or
+.Xr unionfs 4
+mount, the file system that holds the data is written.
+On a file system that is mounted read-only,
+.Fn syncfs
+does nothing and succeeds.
+.Sh RETURN VALUES
+.Rv -std syncfs
+.Sh ERRORS
+The
+.Fn syncfs
+system call fails if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The
+.Fa fd
+argument is not a valid descriptor or is an
+.Dv O_PATH
+descriptor,
+or the file system was forcibly unmounted.
+.It Bq Er EINVAL
+The
+.Fa fd
+argument does not reference a file on a file system,
+for example a socket, a pipe or a shared memory object.
+.It Bq Er ENOENT
+The file system is being unmounted.
+.It Bq Er ENOTCAPABLE
+The
+.Fa fd
+argument is a capability without the
+.Dv CAP_FSYNC
+right.
+.It Bq Er EINTR
+A signal was delivered while the call waited for a suspended
+file system.
+.It Bq Er EIO
+An I/O error occurred while the file system was written.
+.El
 .Sh SEE ALSO
 .Xr fsync 2 ,
+.Xr nullfs 4 ,
 .Xr syncer 4 ,
 .Xr sync 8
+.Sh STANDARDS
+The
+.Fn sync
+function conforms to
+.St -p1003.1-2008 .
+The
+.Fn syncfs
+system call is a
+.Fx
+extension that is compatible with the Linux system call of the same
+name.
+Linux also accepts a descriptor that does not reference a file on a
+file system.
 .Sh HISTORY
 The
 .Fn sync
 function appeared in
 .At v3 .
+The
+.Fn syncfs
+system call first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
 .Sh BUGS
 The
 .Fn sync

@@ -57,6 +57,7 @@ ATF_TESTS_C+=	subr_physmem_test
 .endif
 PLAIN_TESTS_C+=	subr_unit_test
 ATF_TESTS_C+=	sysctl_kern_proc
+ATF_TESTS_C+=	syncfs_test
 ATF_TESTS_C+=	sys_getrandom
 ATF_TESTS_C+=	timerfd
 LIBADD.timerfd+=	pthread

@@ -3458,6 +3458,13 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 5;
 		break;
 	}
+	/* syncfs */
+	case 603: {
+		struct syncfs_args *p = params;
+		iarg[a++] = p->fd; /* int */
+		*n_args = 1;
+		break;
+	}
 	/* epoll_ctl */
 	case 610: {
 		struct epoll_ctl_args *p = params;
@@ -9368,6 +9375,16 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* syncfs */
+	case 603:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* epoll_ctl */
 	case 610:
 		switch (ndx) {
@@ -11339,6 +11356,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 	/* renameat2 */
 	case 602:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* syncfs */
+	case 603:
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;

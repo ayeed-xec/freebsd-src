@@ -396,6 +396,7 @@ FBSD_1.9 {
 	pdrfork;
 	pdrfork_thread;
 	renameat2;
+	syncfs;
 };
 
 FBSDprivate_1.0 {

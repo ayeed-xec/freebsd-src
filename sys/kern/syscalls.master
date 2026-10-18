@@ -3422,7 +3422,12 @@
 		    int flags
 		);
 	}
-603-609	AUE_NULL	RESERVED
+603	AUE_NULL	STD|CAPENABLED {
+		int syncfs(
+		    int fd
+		);
+	}
+604-609	AUE_NULL	RESERVED
 610	AUE_NULL	STD|CAPENABLED {
 		int epoll_ctl(
 		    int epfd,
