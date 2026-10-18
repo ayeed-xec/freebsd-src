@@ -74,6 +74,7 @@ static u_long uihash;		/* size of hash table - 1 */
 static void	calcru1(struct proc *p, struct rusage_ext *ruxp,
 		    struct timeval *up, struct timeval *sp);
 static int	donice(struct thread *td, struct proc *chgp, int n);
+static int	donice_thread(struct thread *td, struct thread *td1, int n);
 static struct uidinfo *uilookup(uid_t uid);
 static void	ruxagg_ext_locked(struct rusage_ext *rux, struct thread *td);
 
@@ -98,6 +99,7 @@ kern_getpriority(struct thread *td, int which, int who)
 {
 	struct proc *p;
 	struct pgrp *pg;
+	struct thread *td1;
 	int error, low;
 
 	error = 0;
@@ -158,6 +160,15 @@ kern_getpriority(struct thread *td, int which, int who)
 		sx_sunlock(&allproc_lock);
 		break;
 
+	case PRIO_THREAD:
+		td1 = tdfind_tidpid(who);
+		if (td1 == NULL)
+			break;
+		if (p_cansee(td, td1->td_proc) == 0)
+			low = td1->td_nice;
+		PROC_UNLOCK(td1->td_proc);
+		break;
+
 	default:
 		error = EINVAL;
 		break;
@@ -187,6 +198,7 @@ kern_setpriority(struct thread *td, int which, int who, int prio)
 {
 	struct proc *curp, *p;
 	struct pgrp *pg;
+	struct thread *td1;
 	int found = 0, error = 0;
 
 	curp = td->td_proc;
@@ -250,6 +262,17 @@ kern_setpriority(struct thread *td, int which, int who, int prio)
 		sx_sunlock(&allproc_lock);
 		break;
 
+	case PRIO_THREAD:
+		td1 = tdfind_tidpid(who);
+		if (td1 == NULL)
+			break;
+		error = p_cansee(td, td1->td_proc);
+		if (error == 0)
+			error = donice_thread(td, td1, prio);
+		PROC_UNLOCK(td1->td_proc);
+		found++;
+		break;
+
 	default:
 		error = EINVAL;
 		break;
@@ -265,7 +288,8 @@ kern_setpriority(struct thread *td, int which, int who, int prio)
 static int
 donice(struct thread *td, struct proc *p, int n)
 {
-	int error;
+	struct thread *td1;
+	int error, high;
 
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	if ((error = p_cansched(td, p)))
@@ -274,9 +298,41 @@ donice(struct thread *td, struct proc *p, int n)
 		n = PRIO_MAX;
 	if (n < PRIO_MIN)
 		n = PRIO_MIN;
-	if (n < p->p_nice && priv_check(td, PRIV_SCHED_SETPRIORITY) != 0)
+	/*
+	 * The new value applies to each thread, so it must not lower the
+	 * nice value of any thread without the privilege.
+	 */
+	high = p->p_nice;
+	FOREACH_THREAD_IN_PROC(p, td1) {
+		if (td1->td_nice > high)
+			high = td1->td_nice;
+	}
+	if (n < high && priv_check(td, PRIV_SCHED_SETPRIORITY) != 0)
 		return (EACCES);
 	sched_nice(p, n);
+	return (0);
+}
+
+/*
+ * Set "nice" for one thread.
+ */
+static int
+donice_thread(struct thread *td, struct thread *td1, int n)
+{
+	int error;
+
+	PROC_LOCK_ASSERT(td1->td_proc, MA_OWNED);
+	if ((error = p_cansched(td, td1->td_proc)) != 0)
+		return (error);
+	if (n > PRIO_MAX)
+		n = PRIO_MAX;
+	if (n < PRIO_MIN)
+		n = PRIO_MIN;
+	if (n < td1->td_nice && priv_check(td, PRIV_SCHED_SETPRIORITY) != 0)
+		return (EACCES);
+	thread_lock(td1);
+	sched_nice_thread(td1, n);
+	thread_unlock(td1);
 	return (0);
 }
 

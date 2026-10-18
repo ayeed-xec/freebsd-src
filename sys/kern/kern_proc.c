@@ -1341,6 +1341,7 @@ fill_kinfo_thread(struct thread *td, struct kinfo_proc *kp, int preferthread)
 		kp->ki_pctcpu = sched_pctcpu(td);
 		kp->ki_estcpu = sched_estcpu(td);
 		kp->ki_cow = td->td_cow;
+		kp->ki_nice = td->td_nice;
 	}
 
 	/* We can't get this anymore but ps etc never used it anyway. */

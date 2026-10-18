@@ -53,6 +53,8 @@ DEFINE_SHIM2(fork, void, sched_fork, struct thread *, td,
 DEFINE_SHIM1(fork_exit, void, sched_fork_exit, struct thread *, td)
 DEFINE_SHIM2(class, void, sched_class, struct thread *, td, int, class)
 DEFINE_SHIM2(nice, void, sched_nice, struct proc *, p, int, nice)
+DEFINE_SHIM2(nice_thread, void, sched_nice_thread, struct thread *, td,
+    int, nice)
 DEFINE_SHIM0(ap_entry, void, sched_ap_entry)
 DEFINE_SHIM2(exit_thread, void, sched_exit_thread, struct thread *, td,
     struct thread *, child)

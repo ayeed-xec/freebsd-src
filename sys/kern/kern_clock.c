@@ -701,7 +701,7 @@ statclock(int cnt, int usermode)
 		 * Charge the time as appropriate.
 		 */
 		td->td_uticks += cnt;
-		if (p->p_nice > NZERO)
+		if (td->td_nice > NZERO)
 			cp_time[CP_NICE] += cnt;
 		else
 			cp_time[CP_USER] += cnt;

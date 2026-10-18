@@ -55,6 +55,9 @@ typedef	__rlim_t	rlim_t;
 #define	PRIO_PROCESS	0
 #define	PRIO_PGRP	1
 #define	PRIO_USER	2
+#if __BSD_VISIBLE
+#define	PRIO_THREAD	3
+#endif
 
 /*
  * Resource utilization information.

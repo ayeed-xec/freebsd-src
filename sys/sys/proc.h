@@ -334,6 +334,7 @@ struct thread {
 	u_char		td_pri_class;	/* (t) Scheduling class. */
 	u_char		td_user_pri;	/* (t) User pri from estcpu and nice. */
 	u_char		td_base_user_pri; /* (t) Base user pri */
+	signed char	td_nice;	/* (c + t) Thread "nice" value. */
 	uintptr_t	td_rb_list;	/* (k) Robust list head. */
 	uintptr_t	td_rbp_list;	/* (k) Robust priv list head. */
 	uintptr_t	td_rb_inact;	/* (k) Current in-action mutex loc. */
@@ -1217,6 +1218,7 @@ bool	should_yield(void);
 int	sigonstack(size_t sp);
 void	stopevent(struct proc *, u_int, u_int);
 struct	thread *tdfind(lwpid_t, pid_t);
+struct	thread *tdfind_tidpid(lwpid_t);
 void	threadinit(void);
 void	tidhash_add(struct thread *);
 void	tidhash_remove(struct thread *);

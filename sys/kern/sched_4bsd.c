@@ -598,7 +598,7 @@ resetpriority(struct thread *td)
 		return;
 	newpriority = PUSER +
 	    td_get_sched(td)->ts_estcpu / INVERSE_ESTCPU_WEIGHT +
-	    NICE_WEIGHT * (td->td_proc->p_nice - PRIO_MIN);
+	    NICE_WEIGHT * (td->td_nice - PRIO_MIN);
 	newpriority = min(max(newpriority, PRI_MIN_TIMESHARE),
 	    PRI_MAX_TIMESHARE);
 	sched_user_prio(td, newpriority);
@@ -822,6 +822,17 @@ sched_4bsd_fork_thread(struct thread *td, struct thread *childtd)
 }
 
 static void
+sched_4bsd_nice_thread(struct thread *td, int nice)
+{
+	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	THREAD_LOCK_ASSERT(td, MA_OWNED);
+
+	td->td_nice = nice;
+	resetpriority(td);
+	resetpriority_thread(td);
+}
+
+static void
 sched_4bsd_nice(struct proc *p, int nice)
 {
 	struct thread *td;
@@ -830,8 +841,7 @@ sched_4bsd_nice(struct proc *p, int nice)
 	p->p_nice = nice;
 	FOREACH_THREAD_IN_PROC(p, td) {
 		thread_lock(td);
-		resetpriority(td);
-		resetpriority_thread(td);
+		sched_4bsd_nice_thread(td, nice);
 		thread_unlock(td);
 	}
 }
@@ -1900,6 +1910,7 @@ struct sched_instance sched_4bsd_instance = {
 	SLOT(setup),
 	SLOT(initticks),
 	SLOT(schedcpu),
+	SLOT(nice_thread),
 #undef SLOT
 };
 DECLARE_SCHEDULER(fourbsd_sched_selector, "4BSD", &sched_4bsd_instance);

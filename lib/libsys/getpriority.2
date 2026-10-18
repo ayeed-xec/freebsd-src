@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd June 4, 1993
+.Dd October 19, 2026
 .Dt GETPRIORITY 2
 .Os
 .Sh NAME
@@ -43,7 +43,7 @@
 .Fn setpriority "int which" "int who" "int prio"
 .Sh DESCRIPTION
 The scheduling
-priority of the process, process group, or user, as indicated by
+priority of the process, process group, user, or thread, as indicated by
 .Fa which
 and
 .Fa who
@@ -58,8 +58,9 @@ argument
 is one of
 .Dv PRIO_PROCESS ,
 .Dv PRIO_PGRP ,
-or
 .Dv PRIO_USER ,
+or
+.Dv PRIO_THREAD ,
 and
 .Fa who
 is interpreted relative to
@@ -69,8 +70,10 @@ is interpreted relative to
 process group
 identifier for
 .Dv PRIO_PGRP ,
-and a user ID for
-.Dv PRIO_USER ) .
+a user ID for
+.Dv PRIO_USER ,
+and a thread or process identifier for
+.Dv PRIO_THREAD ) .
 A zero value of
 .Fa who
 denotes the current process, process group, or user.
@@ -90,6 +93,32 @@ The
 system call sets the priorities of all of the specified processes
 to the specified value.
 Only the super-user may lower priorities.
+.Pp
+Each thread has its own priority.
+.Dv PRIO_PROCESS ,
+.Dv PRIO_PGRP
+and
+.Dv PRIO_USER
+set the priority of each thread of each specified process, and
+.Fn getpriority
+returns the priority of the process.
+Such a change fails for a non super-user if the new value is lower than the
+priority of any thread of the process.
+With
+.Dv PRIO_THREAD ,
+.Fn setpriority
+sets the priority of one thread only, and
+.Fn getpriority
+returns it.
+A
+.Fa who
+of zero denotes the calling thread.
+Thread identifiers
+.Pq see Xr thr_self 2
+are larger than all process identifiers, so a
+.Fa who
+that is a process identifier denotes the first thread of that process.
+A new thread or process gets the priority of the thread that creates it.
 .Sh RETURN VALUES
 Since
 .Fn getpriority
@@ -110,7 +139,7 @@ system calls
 will fail if:
 .Bl -tag -width Er
 .It Bq Er ESRCH
-No process was located using the
+No process or thread was located using the
 .Fa which
 and
 .Fa who
@@ -122,8 +151,9 @@ argument
 was not one of
 .Dv PRIO_PROCESS ,
 .Dv PRIO_PGRP ,
+.Dv PRIO_USER ,
 or
-.Dv PRIO_USER .
+.Dv PRIO_THREAD .
 .El
 .Pp
 In addition to the errors indicated above,
@@ -139,9 +169,14 @@ A non super-user attempted to lower a process priority.
 .Sh SEE ALSO
 .Xr nice 1 ,
 .Xr fork 2 ,
+.Xr thr_self 2 ,
 .Xr renice 8
 .Sh HISTORY
 The
 .Fn getpriority
 system call appeared in
 .Bx 4.2 .
+The
+.Dv PRIO_THREAD
+value first appeared in the freebsd-android-native fork of
+.Fx 15.1 .

@@ -1797,6 +1797,34 @@ tdfind(lwpid_t tid, pid_t pid)
 	}
 }
 
+/*
+ * Find a thread by an id that can also be a process id: 0 is the calling
+ * thread, an id above PID_MAX is the thread id of a thread of any process,
+ * and any other positive id is a process id, which names the first thread
+ * of that process.  Thread ids are always above PID_MAX.  The process of
+ * the thread is returned locked.
+ */
+struct thread *
+tdfind_tidpid(lwpid_t id)
+{
+	struct proc *p;
+	struct thread *td;
+
+	if (id == 0) {
+		td = curthread;
+		PROC_LOCK(td->td_proc);
+		return (td);
+	}
+	if (id > PID_MAX)
+		return (tdfind(id, -1));
+	if (id < 0)
+		return (NULL);
+	p = pfind(id);
+	if (p == NULL)
+		return (NULL);
+	return (FIRST_THREAD_IN_PROC(p));
+}
+
 void
 tidhash_add(struct thread *td)
 {

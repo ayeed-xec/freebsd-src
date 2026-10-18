@@ -519,6 +519,7 @@ proc0_init(void *dummy __unused)
 	p->p_klist = knlist_alloc(&p->p_mtx);
 	STAILQ_INIT(&p->p_ktr);
 	p->p_nice = NZERO;
+	td->td_nice = NZERO;
 	td->td_tid = THREAD0_TID;
 	tidhash_add(td);
 	TD_SET_STATE(td, TDS_RUNNING);

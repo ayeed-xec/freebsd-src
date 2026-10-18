@@ -1735,7 +1735,7 @@ sched_priority(struct thread *td)
 	if (PRI_BASE(td->td_pri_class) != PRI_TIMESHARE)
 		return;
 
-	nice = td->td_proc->p_nice;
+	nice = td->td_nice;
 	/*
 	 * If the score is interactive we place the thread in the realtime
 	 * queue with a priority that is less than kernel and interrupt
@@ -1745,7 +1745,7 @@ sched_priority(struct thread *td)
 	 * where the priority is partially decided by the most recent cpu
 	 * utilization and the rest is decided by nice value.
 	 *
-	 * The nice value of the process has a linear effect on the calculated
+	 * The nice value of the thread has a linear effect on the calculated
 	 * score.  Negative nice values make it easier for a thread to be
 	 * considered interactive.
 	 */
@@ -2426,7 +2426,21 @@ sched_ule_sswitch(struct thread *td, int flags)
 }
 
 /*
- * Adjust thread priorities as a result of a nice request.
+ * Adjust the priority of a thread as a result of a nice request.
+ */
+static void
+sched_ule_nice_thread(struct thread *td, int nice)
+{
+	PROC_LOCK_ASSERT(td->td_proc, MA_OWNED);
+	THREAD_LOCK_ASSERT(td, MA_OWNED);
+
+	td->td_nice = nice;
+	sched_priority(td);
+	sched_prio(td, td->td_base_user_pri);
+}
+
+/*
+ * Adjust thread priorities as a result of a nice request for a process.
  */
 static void
 sched_ule_nice(struct proc *p, int nice)
@@ -2438,8 +2452,7 @@ sched_ule_nice(struct proc *p, int nice)
 	p->p_nice = nice;
 	FOREACH_THREAD_IN_PROC(p, td) {
 		thread_lock(td);
-		sched_priority(td);
-		sched_prio(td, td->td_base_user_pri);
+		sched_ule_nice_thread(td, nice);
 		thread_unlock(td);
 	}
 }
@@ -3443,6 +3456,7 @@ struct sched_instance sched_ule_instance = {
 	SLOT(setup),
 	SLOT(initticks),
 	SLOT(schedcpu),
+	SLOT(nice_thread),
 #undef SLOT
 };
 DECLARE_SCHEDULER(ule_sched_selector, "ULE", &sched_ule_instance);

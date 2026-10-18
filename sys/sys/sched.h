@@ -108,6 +108,7 @@ void	sched_ithread_prio(struct thread *td, u_char prio);
 void	sched_lend_prio(struct thread *td, u_char prio);
 void	sched_lend_user_prio(struct thread *td, u_char pri);
 void	sched_lend_user_prio_cond(struct thread *td, u_char pri);
+void	sched_nice_thread(struct thread *td, int nice);
 fixpt_t	sched_pctcpu(struct thread *td);
 void	sched_prio(struct thread *td, u_char prio);
 void	sched_sleep(struct thread *td, int prio);
@@ -320,6 +321,7 @@ struct sched_instance {
 	void	(*setup)(void);
 	void	(*initticks)(void);
 	void	(*schedcpu)(void);
+	void	(*nice_thread)(struct thread *td, int nice);
 };
 
 extern const struct sched_instance *active_sched;
