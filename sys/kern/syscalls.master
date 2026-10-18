@@ -3427,7 +3427,15 @@
 		    int fd
 		);
 	}
-604-609	AUE_NULL	RESERVED
+604	AUE_NULL	STD|CAPENABLED {
+		int thr_sigqueueinfo(
+		    pid_t pid,
+		    long id,
+		    int sig,
+		    _In_ _Contains_long_ptr_ const struct __siginfo *info
+		);
+	}
+605-609	AUE_NULL	RESERVED
 610	AUE_NULL	STD|CAPENABLED {
 		int epoll_ctl(
 		    int epfd,

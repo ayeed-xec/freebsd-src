@@ -3465,6 +3465,16 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 1;
 		break;
 	}
+	/* freebsd32_thr_sigqueueinfo */
+	case 604: {
+		struct freebsd32_thr_sigqueueinfo_args *p = params;
+		iarg[a++] = p->pid; /* pid_t */
+		iarg[a++] = p->id; /* int32_t */
+		iarg[a++] = p->sig; /* int */
+		uarg[a++] = (intptr_t)p->info; /* const struct __siginfo32 * */
+		*n_args = 4;
+		break;
+	}
 	/* epoll_ctl */
 	case 610: {
 		struct epoll_ctl_args *p = params;
@@ -9385,6 +9395,25 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* freebsd32_thr_sigqueueinfo */
+	case 604:
+		switch (ndx) {
+		case 0:
+			p = "pid_t";
+			break;
+		case 1:
+			p = "int32_t";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "userland const struct __siginfo32 *";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* epoll_ctl */
 	case 610:
 		switch (ndx) {
@@ -11361,6 +11390,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 	/* syncfs */
 	case 603:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* freebsd32_thr_sigqueueinfo */
+	case 604:
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;

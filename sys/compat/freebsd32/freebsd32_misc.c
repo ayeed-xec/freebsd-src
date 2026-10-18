@@ -3356,6 +3356,38 @@ freebsd32_sigqueue(struct thread *td, struct freebsd32_sigqueue_args *uap)
 	return (kern_sigqueue(td, uap->pid, uap->signum, &sv));
 }
 
+static void
+siginfo32_to_siginfo(const struct __siginfo32 *src, siginfo_t *dst)
+{
+	bzero(dst, sizeof(*dst));
+	dst->si_signo = src->si_signo;
+	dst->si_errno = src->si_errno;
+	dst->si_code = src->si_code;
+	dst->si_pid = src->si_pid;
+	dst->si_uid = src->si_uid;
+	dst->si_status = src->si_status;
+	dst->si_addr = (void *)(uintptr_t)src->si_addr;
+	dst->si_value.sival_int = src->si_value.sival_int;
+	dst->si_timerid = src->si_timerid;
+	dst->si_overrun = src->si_overrun;
+}
+
+int
+freebsd32_thr_sigqueueinfo(struct thread *td,
+    struct freebsd32_thr_sigqueueinfo_args *uap)
+{
+	struct __siginfo32 si32;
+	ksiginfo_t ksi;
+	int error;
+
+	error = copyin(uap->info, &si32, sizeof(si32));
+	if (error != 0)
+		return (error);
+	ksiginfo_init(&ksi);
+	siginfo32_to_siginfo(&si32, &ksi.ksi_info);
+	return (kern_thr_sigqueueinfo(td, uap->pid, uap->id, uap->sig, &ksi));
+}
+
 int
 freebsd32_sigtimedwait(struct thread *td, struct freebsd32_sigtimedwait_args *uap)
 {

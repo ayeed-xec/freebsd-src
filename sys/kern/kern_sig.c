@@ -2074,6 +2074,83 @@ kern_sigqueue(struct thread *td, pid_t pid, int signumf, union sigval *value)
 	return (error);
 }
 
+#ifndef _SYS_SYSPROTO_H_
+struct thr_sigqueueinfo_args {
+	pid_t pid;
+	long id;
+	int sig;
+	const struct __siginfo *info;
+};
+#endif
+int
+sys_thr_sigqueueinfo(struct thread *td, struct thr_sigqueueinfo_args *uap)
+{
+	ksiginfo_t ksi;
+	int error;
+
+	ksiginfo_init(&ksi);
+	error = copyin(uap->info, &ksi.ksi_info, sizeof(ksi.ksi_info));
+	if (error != 0)
+		return (error);
+	return (kern_thr_sigqueueinfo(td, uap->pid, uap->id, uap->sig, &ksi));
+}
+
+/*
+ * Queue a signal with a siginfo from the caller to one thread.  A thread
+ * of the calling process gets the siginfo as it is, so that a process can
+ * send again a signal that it caught.  Another process can only get an
+ * SI_QUEUE signal, and the kernel fills in the sender, as for sigqueue(2).
+ */
+int
+kern_thr_sigqueueinfo(struct thread *td, pid_t pid, lwpid_t tid, int sig,
+    ksiginfo_t *ksi)
+{
+	union sigval value;
+	struct proc *p;
+	struct thread *ttd;
+	int error;
+
+	AUDIT_ARG_SIGNUM(sig);
+	if (pid <= 0 || tid <= 0 || (sig != 0 && !_SIG_VALID(sig)))
+		return (EINVAL);
+
+	/*
+	 * A process in capability mode can send signals only to itself.
+	 */
+	if (pid != td->td_proc->p_pid) {
+		if (CAP_TRACING(td))
+			ktrcapfail(CAPFAIL_SIGNAL, &sig);
+		if (IN_CAPABILITY_MODE(td))
+			return (ECAPMODE);
+	}
+
+	ttd = tdfind(tid, pid);
+	if (ttd == NULL)
+		return (ESRCH);
+	p = ttd->td_proc;
+	AUDIT_ARG_PROCESS(p);
+	error = p_cansignal(td, p, sig);
+	if (error == 0 && p != td->td_proc) {
+		if (ksi->ksi_code != SI_QUEUE) {
+			error = EPERM;
+		} else {
+			value = ksi->ksi_value;
+			ksiginfo_init(ksi);
+			ksi->ksi_code = SI_QUEUE;
+			ksi->ksi_pid = td->td_proc->p_pid;
+			ksi->ksi_uid = td->td_ucred->cr_ruid;
+			ksi->ksi_value = value;
+		}
+	}
+	if (error == 0 && sig != 0) {
+		ksi->ksi_flags = KSI_SIGQ;
+		ksi->ksi_signo = sig;
+		error = tdsendsignal(p, ttd, sig, ksi);
+	}
+	PROC_UNLOCK(p);
+	return (error);
+}
+
 /*
  * Send a signal to a process group.  If checktty is 1,
  * limit to members which have a controlling terminal.

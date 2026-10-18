@@ -80,6 +80,8 @@ int thr_kill2(pid_t pid, long id, int sig);
 int thr_suspend(const struct timespec *timeout);
 int thr_wake(long id);
 int thr_set_name(long id, const char *name);
+int thr_sigqueueinfo(pid_t pid, long id, int sig,
+    const struct __siginfo *info);
 __END_DECLS
 #endif /* !_KERNEL */
 

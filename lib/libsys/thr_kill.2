@@ -25,11 +25,13 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd May 5, 2020
+.Dd October 18, 2026
 .Dt THR_KILL 2
 .Os
 .Sh NAME
-.Nm thr_kill
+.Nm thr_kill ,
+.Nm thr_kill2 ,
+.Nm thr_sigqueueinfo
 .Nd send signal to thread
 .Sh LIBRARY
 .Lb libc
@@ -39,6 +41,8 @@
 .Fn thr_kill "long id" "int sig"
 .Ft int
 .Fn thr_kill2 "pid_t pid" "long id" "int sig"
+.Ft int
+.Fn thr_sigqueueinfo "pid_t pid" "long id" "int sig" "const siginfo_t *info"
 .Sh DESCRIPTION
 The
 .Fn thr_kill
@@ -77,19 +81,67 @@ The signal is delivered with
 .Dv si_code
 set to
 .Dv SI_LWP .
+.Pp
+The
+.Fn thr_sigqueueinfo
+system call queues the signal
+.Fa sig
+to the thread with the identifier
+.Fa id
+in the process
+.Fa pid ,
+with the signal information that
+.Fa info
+points to.
+The
+.Va si_signo
+member is set to
+.Fa sig .
+If
+.Fa pid
+is the current process, the other members are delivered as they are,
+whatever the value of
+.Va si_code .
+A process can use this to send again a signal that it caught, with the
+original signal information.
+If
+.Fa pid
+is another process,
+.Va si_code
+must be
+.Dv SI_QUEUE ,
+only
+.Va si_value
+is taken from
+.Fa info ,
+and
+.Va si_pid
+and
+.Va si_uid
+are set to the process identifier and the real user identifier of the
+caller, as for
+.Xr sigqueue 2 .
+The signal is queued as by
+.Xr sigqueue 2 ,
+and the limit on the number of queued signals of the process applies.
+A
+.Fa sig
+of zero only checks the existence of the thread and the permission.
 .Sh RETURN VALUES
 If successful,
-.Fn thr_kill
-and
+.Fn thr_kill ,
 .Fn thr_kill2
+and
+.Fn thr_sigqueueinfo
 will return zero, otherwise \-1 is returned, and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
 The
-.Fn thr_kill
-and
+.Fn thr_kill ,
 .Fn thr_kill2
+and
+.Fn thr_sigqueueinfo
 operations return the following errors:
 .Bl -tag -width Er
 .It Bq Er EINVAL
@@ -102,15 +154,44 @@ The specified process or thread was not found.
 .Pp
 Additionally, the
 .Fn thr_kill2
+and
+.Fn thr_sigqueueinfo
 may return the following errors:
 .Bl -tag -width Er
 .It Bq Er EPERM
 The current process does not have sufficient privilege to check existence or
 send a signal to the specified process.
 .El
+.Pp
+Additionally, the
+.Fn thr_sigqueueinfo
+may return the following errors:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The
+.Fa pid
+or the
+.Fa id
+argument is zero or negative.
+.It Bq Er EPERM
+The specified process is not the current process, and
+.Va si_code
+is not
+.Dv SI_QUEUE .
+.It Bq Er EFAULT
+The
+.Fa info
+argument points outside the process address space.
+.It Bq Er ECAPMODE
+The current process is in capability mode, and the specified process is
+not the current process.
+.It Bq Er EAGAIN
+The process has reached the limit on the number of queued signals.
+.El
 .Sh SEE ALSO
 .Xr _umtx_op 2 ,
 .Xr kill 2 ,
+.Xr sigqueue 2 ,
 .Xr thr_exit 2 ,
 .Xr thr_new 2 ,
 .Xr thr_self 2 ,
@@ -128,6 +209,12 @@ to implement
 .St -p1003.1-2001
 .Xr pthread 3
 functionality.
+The
+.Fn thr_sigqueueinfo
+system call is non-standard.
+It gives the behavior of the Linux
+.Fn rt_tgsigqueueinfo
+system call.
 .Sh HISTORY
 The
 .Fn thr_kill
@@ -135,3 +222,7 @@ and
 .Fn thr_kill2
 system calls first appeared in
 .Fx 5.2 .
+The
+.Fn thr_sigqueueinfo
+system call first appeared in the freebsd-android-native fork of
+.Fx 15.1 .

@@ -670,7 +670,7 @@ struct sysent sysent[] = {
 	{ .sy_narg = AS(pdwait_args), .sy_call = (sy_call_t *)sys_pdwait, .sy_auevent = AUE_PDWAIT, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 601 = pdwait */
 	{ .sy_narg = AS(renameat2_args), .sy_call = (sy_call_t *)sys_renameat2, .sy_auevent = AUE_RENAMEAT, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 602 = renameat2 */
 	{ .sy_narg = AS(syncfs_args), .sy_call = (sy_call_t *)sys_syncfs, .sy_auevent = AUE_NULL, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 603 = syncfs */
-	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 604 = reserved for local use */
+	{ .sy_narg = AS(thr_sigqueueinfo_args), .sy_call = (sy_call_t *)sys_thr_sigqueueinfo, .sy_auevent = AUE_NULL, .sy_flags = SYF_CAPENABLED, .sy_thrcnt = SY_THR_STATIC },	/* 604 = thr_sigqueueinfo */
 	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 605 = reserved for local use */
 	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 606 = reserved for local use */
 	{ .sy_narg = 0, .sy_call = (sy_call_t *)nosys, .sy_auevent = AUE_NULL, .sy_flags = 0, .sy_thrcnt = SY_THR_ABSENT },	/* 607 = reserved for local use */

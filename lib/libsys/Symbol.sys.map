@@ -397,6 +397,7 @@ FBSD_1.9 {
 	pdrfork_thread;
 	renameat2;
 	syncfs;
+	thr_sigqueueinfo;
 };
 
 FBSDprivate_1.0 {

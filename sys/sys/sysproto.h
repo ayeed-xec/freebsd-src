@@ -1929,6 +1929,12 @@ struct renameat2_args {
 struct syncfs_args {
 	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
 };
+struct thr_sigqueueinfo_args {
+	char pid_l_[PADL_(pid_t)]; pid_t pid; char pid_r_[PADR_(pid_t)];
+	char id_l_[PADL_(long)]; long id; char id_r_[PADR_(long)];
+	char sig_l_[PADL_(int)]; int sig; char sig_r_[PADR_(int)];
+	char info_l_[PADL_(const struct __siginfo *)]; const struct __siginfo * info; char info_r_[PADR_(const struct __siginfo *)];
+};
 struct epoll_ctl_args {
 	char epfd_l_[PADL_(int)]; int epfd; char epfd_r_[PADR_(int)];
 	char op_l_[PADL_(int)]; int op; char op_r_[PADR_(int)];
@@ -2352,6 +2358,7 @@ int	sys_pdrfork(struct thread *, struct pdrfork_args *);
 int	sys_pdwait(struct thread *, struct pdwait_args *);
 int	sys_renameat2(struct thread *, struct renameat2_args *);
 int	sys_syncfs(struct thread *, struct syncfs_args *);
+int	sys_thr_sigqueueinfo(struct thread *, struct thr_sigqueueinfo_args *);
 int	sys_epoll_ctl(struct thread *, struct epoll_ctl_args *);
 int	sys_epoll_pwait2(struct thread *, struct epoll_pwait2_args *);
 
@@ -3356,6 +3363,7 @@ int	freebsd14_setgroups(struct thread *, struct freebsd14_setgroups_args *);
 #define	SYS_AUE_pdwait	AUE_PDWAIT
 #define	SYS_AUE_renameat2	AUE_RENAMEAT
 #define	SYS_AUE_syncfs	AUE_NULL
+#define	SYS_AUE_thr_sigqueueinfo	AUE_NULL
 #define	SYS_AUE_epoll_ctl	AUE_NULL
 #define	SYS_AUE_epoll_pwait2	AUE_NULL
 

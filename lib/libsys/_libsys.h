@@ -475,6 +475,7 @@ typedef int (__sys_pdrfork_t)(int *, int, int);
 typedef int (__sys_pdwait_t)(int, int *, int, struct __wrusage *, struct __siginfo *);
 typedef int (__sys_renameat2_t)(int, const char *, int, const char *, int);
 typedef int (__sys_syncfs_t)(int);
+typedef int (__sys_thr_sigqueueinfo_t)(pid_t, long, int, const struct __siginfo *);
 typedef int (__sys_epoll_ctl_t)(int, int, int, struct epoll_event *);
 typedef int (__sys_epoll_pwait2_t)(int, struct epoll_event *, int, const struct timespec *, const sigset_t *);
 
@@ -887,6 +888,7 @@ int __sys_pdrfork(int * fdp, int pdflags, int rfflags);
 int __sys_pdwait(int fd, int * status, int options, struct __wrusage * wrusage, struct __siginfo * info);
 int __sys_renameat2(int oldfd, const char * old, int newfd, const char * new, int flags);
 int __sys_syncfs(int fd);
+int __sys_thr_sigqueueinfo(pid_t pid, long id, int sig, const struct __siginfo * info);
 int __sys_epoll_ctl(int epfd, int op, int fd, struct epoll_event * event);
 int __sys_epoll_pwait2(int epfd, struct epoll_event * events, int maxevents, const struct timespec * timeout, const sigset_t * sigmask);
 __END_DECLS

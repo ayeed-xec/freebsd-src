@@ -445,5 +445,6 @@ MIASM =  \
 	pdwait.o \
 	renameat2.o \
 	syncfs.o \
+	thr_sigqueueinfo.o \
 	epoll_ctl.o \
 	epoll_pwait2.o
