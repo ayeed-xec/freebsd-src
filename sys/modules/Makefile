@@ -39,6 +39,7 @@ SUBDIR=	\
 	${_amdsmn} \
 	${_amdtemp} \
 	${_aout} \
+	aprocfs \
 	${_arcmsr} \
 	${_allwinner} \
 	${_armv8crypto} \

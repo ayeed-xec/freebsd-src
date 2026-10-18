@@ -1,0 +1,287 @@
+.\"
+.\" Copyright (c) 2026 Ayeed Shaikh <Ayeed.AI10@race.reva.edu.in>
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd October 18, 2026
+.Dt APROCFS 4
+.Os
+.Sh NAME
+.Nm aprocfs
+.Nd process file system in the layout of Android
+.Sh SYNOPSIS
+To load the file system as a module at boot time, place the following
+line in
+.Xr loader.conf 5 :
+.Bd -literal -offset indent
+aprocfs_load="YES"
+.Ed
+.Pp
+To mount it in a jail, add a line such as the following to
+.Xr jail.conf 5 :
+.Bd -literal -offset indent
+mount += "aprocfs $path/proc aprocfs rw 0 0";
+.Ed
+.Sh DESCRIPTION
+The
+.Nm
+file system gives a
+.Pa /proc
+tree with the names and the text layout that Android programs read
+on Linux.
+It is intended for a jail that runs Android programs on the native
+.Fx
+ABI.
+The values are
+.Fx
+values: signal numbers, scheduling policies, thread identifiers and the
+.Xr uname 3
+strings are those of
+.Fx .
+.Pp
+.Nm
+does not use the
+.Xr linux 4
+ABI and does not change
+.Xr procfs 4 .
+A program sees
+.Nm
+only where it is mounted.
+.Pp
+The top level directory contains:
+.Bl -tag -width "sys/kernel/pid_max"
+.It Pa self
+A symbolic link to the directory of the reading process.
+.It Pa version
+One line:
+the
+.Va kern.ostype
+value, the word
+.Dq version ,
+the
+.Va kern.osrelease
+value and the
+.Va kern.version
+value in parentheses.
+The values are those that the reader sees, so a jail with its own
+.Va osrelease
+shows that value.
+.It Pa sys/kernel/pid_max
+One more than the largest process or thread identifier:
+.Dv NO_PID
+plus the
+.Va kern.maxthread
+value.
+.It Pa <pid>
+A directory for each process that the reader can see.
+A thread identifier also names a directory, which is not listed.
+It shows the same files as
+.Pa <pid>/task/<tid> .
+.El
+.Pp
+Each process directory contains:
+.Bl -tag -width "status"
+.It Pa cmdline
+The arguments of the process, each followed by a NUL byte, as the
+.Va kern.proc.args
+sysctl gives them.
+It is empty for a zombie and for a system process.
+.It Pa comm
+The name of the first thread, or the command name if the thread has
+no name, and a newline.
+The name has at most 15 bytes.
+.It Pa exe
+A symbolic link to the executable, as the
+.Va kern.proc.pathname
+sysctl gives it.
+.It Pa fd
+A directory with one entry for each open file descriptor.
+See
+.Sx File descriptors .
+.It Pa maps
+One line for each entry of the address space, as the
+.Va kern.proc.vmmap
+sysctl gives them:
+the start and end addresses, the protection, the letter
+.Ql s
+for a shared entry or
+.Ql p
+for a private one, the offset, the device, the inode number and the
+path.
+The path column shows
+.Ql [stack]
+for the stack and
+.Ql [vdso]
+for the shared page.
+.It Pa stat
+One line of 52 fields, in the order of the Linux
+.Pa stat
+file.
+Times are in ticks of 100 Hz.
+The priority field is 20 plus the nice value for a timeshare thread,
+and the negative real-time priority minus one for a real-time thread.
+Fields that
+.Fx
+has no source for are 0.
+The address fields are 0 unless the reader can debug the process.
+.It Pa status
+One field on each line, the name and a tab, then the value.
+Signal sets have 128 bits and show as 32 hexadecimal digits;
+bit
+.Ar n Ns \-1
+is signal
+.Ar n .
+The capability sets are 0.
+.It Pa task
+A directory with one subdirectory for each thread, named by its thread
+identifier.
+A thread directory has
+.Pa cmdline ,
+.Pa comm ,
+.Pa exe ,
+.Pa fd ,
+.Pa maps ,
+.Pa stat
+and
+.Pa status ,
+with the values of that thread where a thread has its own value.
+.El
+.Ss File descriptors
+Each entry of
+.Pa fd
+is named by the descriptor number.
+.Xr readlink 2
+of an entry gives the path of the file when the kernel knows it.
+Such an entry is a symbolic link:
+.Xr open 2 ,
+.Xr stat 2
+and
+.Xr realpath 3
+follow the path.
+.Pp
+For any other descriptor,
+.Xr readlink 2
+gives a description:
+.Ql pipe:[inode] ,
+.Ql socket:[inode] ,
+.Ql anon_inode:[kqueue] ,
+.Ql anon_inode:[eventfd] ,
+.Ql anon_inode:[timerfd] ,
+.Ql anon_inode:inotify ,
+.Ql anon_inode:[pidfd] ,
+the path of a named shared memory object,
+.Ql /memfd:\ (deleted)
+for an anonymous one, or
+.Ql /#inode
+for a file whose path is not known, followed by
+.Ql \ (deleted)
+when the file has no links.
+Such an entry is not a symbolic link.
+Opening an entry of the calling process duplicates the descriptor, as
+.Xr fdescfs 4
+does.
+Opening an entry of another process fails.
+.Ss Access
+A process directory is visible only to readers that
+.Xr p_cansee 9
+allows, which includes the jail check.
+.Pa fd
+and
+.Pa maps
+also need the permission of
+.Xr p_candebug 9 ,
+as the
+.Va kern.proc.filedesc
+and
+.Va kern.proc.vmmap
+sysctls do.
+All files are read-only.
+.Xr fsync 2
+and
+.Xr fdatasync 2
+on any node fail with
+.Er EINVAL .
+.Sh FILES
+.Bl -tag -width "/proc/self/status" -compact
+.It Pa /proc/version
+.It Pa /proc/sys/kernel/pid_max
+.It Pa /proc/self
+.It Pa /proc/<pid>/stat
+.It Pa /proc/<pid>/status
+.It Pa /proc/<pid>/maps
+.It Pa /proc/<pid>/fd/<n>
+.It Pa /proc/<pid>/task/<tid>
+.El
+.Sh EXAMPLES
+To mount an
+.Nm
+file system on
+.Pa /compat/android/proc :
+.Pp
+.Dl "mount -t aprocfs aprocfs /compat/android/proc"
+.Sh SEE ALSO
+.Xr procstat 1 ,
+.Xr jail 2 ,
+.Xr mount 2 ,
+.Xr asysfs 4 ,
+.Xr fdescfs 4 ,
+.Xr procfs 4 ,
+.Xr jail.conf 5 ,
+.Xr jail 8 ,
+.Xr mount 8 ,
+.Xr p_candebug 9 ,
+.Xr p_cansee 9 ,
+.Xr pseudofs 9
+.Sh HISTORY
+The
+.Nm
+file system first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
+.Sh AUTHORS
+.An Ayeed Shaikh Aq Mt Ayeed.AI10@race.reva.edu.in
+.Sh CAVEATS
+.Nm
+is not a
+.Xr pseudofs 9
+file system.
+Its directories of threads and of file descriptors change at run time,
+which
+.Xr pseudofs 9
+does not support.
+.Sh BUGS
+The open mode of a descriptor does not show in the mode of its
+.Pa fd
+entry.
+.Pp
+The
+.Pa maps
+path of a file in a
+.Xr nullfs 4
+mount is the path of the lower file.
+A shared anonymous mapping shows as private.
+.Pp
+The priority field of
+.Pa stat
+does not show a priority that a timeshare thread borrows through a
+priority-inheritance mutex.
