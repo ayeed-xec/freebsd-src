@@ -542,6 +542,7 @@
 #define	SYS_renameat2	602
 #define	SYS_syncfs	603
 #define	SYS_thr_sigqueueinfo	604
+#define	SYS_thr_get_name	605
 #define	SYS_epoll_ctl	610
 #define	SYS_epoll_pwait2	611
 #define	SYS_MAXSYSCALL	612

@@ -572,6 +572,8 @@ static const struct syscall_decode decoded_syscalls[] = {
 	{ .name = "__sysctlbyname", .ret_type = 1, .nargs = 6,
 	  .args = { { Name, 0 }, { Sizet, 1 }, { Ptr, 2 }, { Ptr, 3 },
 	            { Ptr, 4}, { Sizet, 5 } } },
+	{ .name = "thr_get_name", .ret_type = 1, .nargs = 3,
+	  .args = { { Long, 0 }, { Name | OUT, 1 }, { Sizet, 2 } } },
 	{ .name = "thr_kill", .ret_type = 1, .nargs = 2,
 	  .args = { { Long, 0 }, { Signal, 1 } } },
 	{ .name = "thr_self", .ret_type = 1, .nargs = 1,

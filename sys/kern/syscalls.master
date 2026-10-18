@@ -3435,7 +3435,14 @@
 		    _In_ _Contains_long_ptr_ const struct __siginfo *info
 		);
 	}
-605-609	AUE_NULL	RESERVED
+605	AUE_NULL	STD|CAPENABLED {
+		int thr_get_name(
+		    long id,
+		    _Out_writes_z_(len) char *name,
+		    size_t len
+		);
+	}
+606-609	AUE_NULL	RESERVED
 610	AUE_NULL	STD|CAPENABLED {
 		int epoll_ctl(
 		    int epfd,

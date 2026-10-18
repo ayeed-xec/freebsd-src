@@ -3562,6 +3562,15 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 4;
 		break;
 	}
+	/* thr_get_name */
+	case 605: {
+		struct thr_get_name_args *p = params;
+		iarg[a++] = p->id; /* long */
+		uarg[a++] = (intptr_t)p->name; /* char * */
+		uarg[a++] = p->len; /* size_t */
+		*n_args = 3;
+		break;
+	}
 	/* epoll_ctl */
 	case 610: {
 		struct epoll_ctl_args *p = params;
@@ -9559,6 +9568,22 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* thr_get_name */
+	case 605:
+		switch (ndx) {
+		case 0:
+			p = "long";
+			break;
+		case 1:
+			p = "userland char *";
+			break;
+		case 2:
+			p = "size_t";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* epoll_ctl */
 	case 610:
 		switch (ndx) {
@@ -11630,6 +11655,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 	/* thr_sigqueueinfo */
 	case 604:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* thr_get_name */
+	case 605:
 		if (ndx == 0 || ndx == 1)
 			p = "int";
 		break;

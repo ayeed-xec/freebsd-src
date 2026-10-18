@@ -827,6 +827,8 @@ FBSDprivate_1.0 {
 	__sys_syncfs;
 	_thr_sigqueueinfo;
 	__sys_thr_sigqueueinfo;
+	_thr_get_name;
+	__sys_thr_get_name;
 	_epoll_ctl;
 	__sys_epoll_ctl;
 	_epoll_pwait2;

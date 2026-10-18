@@ -25,18 +25,21 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd May 5, 2020
+.Dd October 18, 2026
 .Dt THR_SET_NAME 2
 .Os
 .Sh NAME
-.Nm thr_set_name
-.Nd set user-visible thread name
+.Nm thr_set_name ,
+.Nm thr_get_name
+.Nd set or get user-visible thread name
 .Sh LIBRARY
 .Lb libc
 .Sh SYNOPSIS
 .In sys/thr.h
 .Ft int
 .Fn thr_set_name "long id" "const char *name"
+.Ft int
+.Fn thr_get_name "long id" "char *name" "size_t len"
 .Sh DESCRIPTION
 The
 .Fn thr_set_name
@@ -53,16 +56,31 @@ and
 .Xr top 1
 commands, in the kernel debuggers and kernel tracing facility outputs,
 and in userland debuggers and program core files, as notes.
+.Pp
+The
+.Fn thr_get_name
+system call copies the name of the thread with the identifier
+.Va id
+in the current process, with its terminating NUL, to the buffer
+.Va name
+of
+.Va len
+bytes.
+A thread that was not given a name has the name of its process.
 .Sh RETURN VALUES
 If successful,
 .Fn thr_set_name
-returns zero; otherwise, \-1 is returned, and
+and
+.Fn thr_get_name
+return zero; otherwise, \-1 is returned, and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
 The
 .Fn thr_set_name
-system call may return the following errors:
+and
+.Fn thr_get_name
+system calls may return the following errors:
 .Bl -tag -width Er
 .It Bq Er EFAULT
 The memory pointed to by the
@@ -72,6 +90,16 @@ argument is not valid.
 The thread with the identifier
 .Fa id
 does not exist in the current process.
+.El
+.Pp
+Additionally, the
+.Fn thr_get_name
+system call may return the following error:
+.Bl -tag -width Er
+.It Bq Er ERANGE
+The
+.Fa len
+argument is smaller than the length of the name plus one.
 .El
 .Sh SEE ALSO
 .Xr ps 1 ,
@@ -87,10 +115,19 @@ does not exist in the current process.
 .Sh STANDARDS
 The
 .Fn thr_set_name
-system call is non-standard and is used by the
+and
+.Fn thr_get_name
+system calls are non-standard.
+The
+.Fn thr_set_name
+system call is used by the
 .Lb libthr .
 .Sh HISTORY
 The
 .Fn thr_set_name
 system call first appeared in
 .Fx 5.2 .
+The
+.Fn thr_get_name
+system call first appeared in the freebsd-android-native fork of
+.Fx 15.1 .

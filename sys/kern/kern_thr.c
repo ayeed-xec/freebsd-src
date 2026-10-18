@@ -642,6 +642,24 @@ sys_thr_set_name(struct thread *td, struct thr_set_name_args *uap)
 }
 
 int
+sys_thr_get_name(struct thread *td, struct thr_get_name_args *uap)
+{
+	char name[MAXCOMLEN + 1];
+	struct thread *ttd;
+	size_t len;
+
+	ttd = tdfind((lwpid_t)uap->id, td->td_proc->p_pid);
+	if (ttd == NULL)
+		return (ESRCH);
+	strlcpy(name, ttd->td_name, sizeof(name));
+	PROC_UNLOCK(ttd->td_proc);
+	len = strlen(name) + 1;
+	if (uap->len < len)
+		return (ERANGE);
+	return (copyout(name, uap->name, len));
+}
+
+int
 kern_thr_alloc(struct proc *p, int pages, struct thread **ntd)
 {
 

@@ -522,6 +522,7 @@
 #define	FREEBSD32_SYS_renameat2	602
 #define	FREEBSD32_SYS_syncfs	603
 #define	FREEBSD32_SYS_freebsd32_thr_sigqueueinfo	604
+#define	FREEBSD32_SYS_thr_get_name	605
 #define	FREEBSD32_SYS_epoll_ctl	610
 #define	FREEBSD32_SYS_freebsd32_epoll_pwait2	611
 #define	FREEBSD32_SYS_MAXSYSCALL	612
