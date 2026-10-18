@@ -3380,7 +3380,7 @@ vget_finish(struct vnode *vp, int flags, enum vgetstate vs)
 	else
 		ASSERT_VI_UNLOCKED(vp, __func__);
 	VNPASS(vs == VGET_HOLDCNT || vs == VGET_USECOUNT, vp);
-	VNPASS(vp->v_holdcnt > 0, vp);
+	VNPASS(vs == VGET_USECOUNT || vp->v_holdcnt > 0, vp);
 	VNPASS(vs == VGET_HOLDCNT || vp->v_usecount > 0, vp);
 
 	error = vn_lock(vp, flags);
@@ -3400,8 +3400,15 @@ vget_finish_ref(struct vnode *vp, enum vgetstate vs)
 {
 	int old;
 
+	/*
+	 * Only check the count we raised ourselves.  With VGET_USECOUNT the
+	 * hold reference was taken by the thread which moved the use count
+	 * from 0 to 1, and nothing orders its hold count store before our
+	 * use count increment.  A weakly ordered CPU can still show us a
+	 * hold count of 0 here.
+	 */
 	VNPASS(vs == VGET_HOLDCNT || vs == VGET_USECOUNT, vp);
-	VNPASS(vp->v_holdcnt > 0, vp);
+	VNPASS(vs == VGET_USECOUNT || vp->v_holdcnt > 0, vp);
 	VNPASS(vs == VGET_HOLDCNT || vp->v_usecount > 0, vp);
 
 	if (vs == VGET_USECOUNT)

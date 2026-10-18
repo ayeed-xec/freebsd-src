@@ -830,6 +830,8 @@
             ..
             fusefs
             ..
+            nullfs
+            ..
             tarfs
             ..
             tmpfs
