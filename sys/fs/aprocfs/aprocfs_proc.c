@@ -443,9 +443,15 @@ aprocfs_do_fd(struct thread *td, const struct aprocfs_key *key,
 		kif = malloc(sizeof(*kif), M_APROCFS, M_WAITOK | M_ZERO);
 		error = fo_fill_kinfo(fp, kif, NULL);
 		if (error == 0) {
-			/* FreeBSD keeps no name for an anonymous object. */
-			if (kif->kf_path[0] != '\0')
+			/*
+			 * A named object has a path that starts with "/".  An
+			 * anonymous one shows the name that memfd_create(3)
+			 * gave it ("memfd:<name>"), if any.
+			 */
+			if (kif->kf_path[0] == '/')
 				sbuf_cat(sb, kif->kf_path);
+			else if (kif->kf_path[0] != '\0')
+				sbuf_printf(sb, "/%s (deleted)", kif->kf_path);
 			else
 				sbuf_cat(sb, "/memfd: (deleted)");
 		}

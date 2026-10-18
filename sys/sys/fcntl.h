@@ -309,6 +309,7 @@ typedef	__pid_t		pid_t;
 #define	F_SEAL_SHRINK	0x0002		/* May not shrink */
 #define	F_SEAL_GROW	0x0004		/* May not grow */
 #define	F_SEAL_WRITE	0x0008		/* May not write */
+#define	F_SEAL_FUTURE_WRITE 0x0010	/* May not write from now on */
 #endif	/* __BSD_VISIBLE */
 
 /* file descriptor flags (F_GETFD, F_SETFD) */

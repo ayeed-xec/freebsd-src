@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd September 22, 2026
+.Dd October 19, 2026
 .Dt FCNTL 2
 .Os
 .Sh NAME
@@ -315,7 +315,7 @@ flag of
 The seals that may be applied with
 .Dv F_ADD_SEALS
 are as follows:
-.Bl -tag -width F_SEAL_SHRINK
+.Bl -tag -width F_SEAL_FUTURE_WRITE
 .It Dv F_SEAL_SEAL
 Prevent any further seals from being applied to the file.
 .It Dv F_SEAL_SHRINK
@@ -333,6 +333,19 @@ Any writes in progress will finish before
 returns.
 If any writeable mappings exist, F_ADD_SEALS will fail and return
 .Dv EBUSY .
+.It Dv F_SEAL_FUTURE_WRITE
+Prevent any further
+.Xr write 2
+calls to the file, new shared mappings of the file with
+.Dv PROT_WRITE ,
+and the deallocation of file space with
+.Xr fspacectl 2 .
+Unlike
+.Dv F_SEAL_WRITE ,
+this seal may be applied while writeable mappings exist,
+and those mappings stay writeable.
+A shared mapping made after the seal cannot become writeable with
+.Xr mprotect 2 .
 .El
 .Pp
 Seals are on a per-inode basis and require support by the underlying filesystem.

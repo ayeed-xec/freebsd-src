@@ -430,6 +430,48 @@ static struct pagerops shm_swap_pager_ops = {
 };
 static int shmfd_pager_type = -1;
 
+/*
+ * SEEK_DATA and SEEK_HOLE.  A page is data when the object has it in memory
+ * or in swap; the end of the object is a hole.
+ */
+static int
+shm_seek_datahole(struct shmfd *shmfd, off_t *offp, bool seekdata)
+{
+	vm_object_t obj;
+	vm_pindex_t p;
+	off_t noff, size;
+
+	noff = *offp;
+	size = shmfd->shm_size;
+	if (noff < 0 || noff >= size)
+		return (ENXIO);
+	if (shm_largepage(shmfd)) {
+		/* Large pages are always resident. */
+		*offp = seekdata ? noff : size;
+		return (0);
+	}
+
+	obj = shmfd->shm_object;
+	VM_OBJECT_RLOCK(obj);
+	if (seekdata) {
+		p = swap_pager_seek_data(obj, OFF_TO_IDX(noff));
+		if (p == OBJ_MAX_SIZE)
+			p = obj->size;
+	} else
+		p = swap_pager_seek_hole(obj, OFF_TO_IDX(noff));
+	VM_OBJECT_RUNLOCK(obj);
+
+	if (p != OFF_TO_IDX(noff))
+		noff = IDX_TO_OFF(p);
+	if (noff >= size) {
+		if (seekdata)
+			return (ENXIO);
+		noff = size;
+	}
+	*offp = noff;
+	return (0);
+}
+
 static int
 shm_seek(struct file *fp, off_t offset, int whence, struct thread *td)
 {
@@ -457,6 +499,10 @@ shm_seek(struct file *fp, off_t offset, int whence, struct thread *td)
 		offset += shmfd->shm_size;
 		break;
 	case L_SET:
+		break;
+	case SEEK_DATA:
+	case SEEK_HOLE:
+		error = shm_seek_datahole(shmfd, &offset, whence == SEEK_DATA);
 		break;
 	default:
 		error = EINVAL;
@@ -535,7 +581,8 @@ shm_write(struct file *fp, struct uio *uio, struct ucred *active_cred,
 		    MAX(newsize, uio->uio_offset));
 	if (shm_largepage(shmfd) && shmfd->shm_lp_psind == 0) {
 		error = EINVAL;
-	} else if ((shmfd->shm_seals & F_SEAL_WRITE) != 0) {
+	} else if ((shmfd->shm_seals &
+	    (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0) {
 		error = EPERM;
 	} else {
 		error = 0;
@@ -1007,6 +1054,7 @@ shm_drop(struct shmfd *shmfd)
 			obj->un_pager.swp.swp_priv = NULL;
 		VM_OBJECT_WUNLOCK(obj);
 		vm_object_deallocate(obj);
+		free(shmfd->shm_name, M_SHMFD);
 		free(shmfd, M_SHMFD);
 	}
 }
@@ -1161,7 +1209,7 @@ shm_doremove(struct shm_mapping *map)
 
 int
 kern_shm_open2(struct thread *td, const char *userpath, int flags, mode_t mode,
-    int shmflags, struct filecaps *fcaps, const char *name __unused,
+    int shmflags, struct filecaps *fcaps, const char *name,
     struct shmfd *shmfd)
 {
 	struct pwddesc *pdp;
@@ -1271,6 +1319,9 @@ kern_shm_open2(struct thread *td, const char *userpath, int flags, mode_t mode,
 
 			shmfd->shm_seals = initial_seals;
 			shmfd->shm_flags = shmflags;
+			if (name != NULL)
+				shmfd->shm_name = strndup(name, NAME_MAX,
+				    M_SHMFD);
 		}
 	} else {
 		fnv = fnv_32_str(path, FNV1_32_INIT);
@@ -1715,15 +1766,16 @@ shm_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t objsize,
 	/*
 	 * If FWRITE's set, we can allow VM_PROT_WRITE unless it's a shared
 	 * mapping with a write seal applied.  Private mappings are always
-	 * writeable.
+	 * writeable.  F_SEAL_FUTURE_WRITE stops new shared writable mappings
+	 * and leaves the existing ones as they are.
 	 */
 	if ((flags & MAP_SHARED) == 0) {
 		if ((max_maxprot & VM_PROT_WRITE) != 0)
 			maxprot |= VM_PROT_WRITE;
 		writecnt = false;
 	} else {
-		if ((fp->f_flag & FWRITE) != 0 &&
-		    (shmfd->shm_seals & F_SEAL_WRITE) == 0)
+		if ((fp->f_flag & FWRITE) != 0 && (shmfd->shm_seals &
+		    (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) == 0)
 			maxprot |= VM_PROT_WRITE;
 
 		/*
@@ -1957,7 +2009,11 @@ shm_fill_kinfo_locked(struct shmfd *shmfd, struct kinfo_file *kif, bool list)
 	kif->kf_type = KF_TYPE_SHM;
 	kif->kf_un.kf_file.kf_file_mode = S_IFREG | shmfd->shm_mode;
 	kif->kf_un.kf_file.kf_file_size = shmfd->shm_size;
-	if (shmfd->shm_path != NULL) {
+	kif->kf_un.kf_file.kf_file_fileid = shmfd->shm_ino;
+	if (shmfd->shm_path == NULL && shmfd->shm_name != NULL && !list) {
+		/* An anonymous object shows the name it was made with. */
+		strlcpy(kif->kf_path, shmfd->shm_name, sizeof(kif->kf_path));
+	} else if (shmfd->shm_path != NULL) {
 		path = shmfd->shm_path;
 		pr_path = curthread->td_ucred->cr_prison->pr_path;
 		if (strcmp(pr_path, "/") != 0) {
@@ -2128,7 +2184,8 @@ shm_fspacectl(struct file *fp, int cmd, off_t *offset, off_t *length, int flags,
 	rl_cookie = shm_rangelock_wlock(shmfd, off, off + len);
 	switch (cmd) {
 	case SPACECTL_DEALLOC:
-		if ((shmfd->shm_seals & F_SEAL_WRITE) != 0) {
+		if ((shmfd->shm_seals &
+		    (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0) {
 			error = EPERM;
 			break;
 		}
@@ -2238,9 +2295,19 @@ kern_shm_open(struct thread *td, const char *path, int flags, mode_t mode,
 int
 sys_shm_open2(struct thread *td, struct shm_open2_args *uap)
 {
+	char name[NAME_MAX + 1];
+	const char *namep;
 
+	/*
+	 * The name is only for debugging, so a name that cannot be read
+	 * is left out and the call goes on.
+	 */
+	namep = NULL;
+	if (uap->name != NULL &&
+	    copyinstr(uap->name, name, sizeof(name), NULL) == 0)
+		namep = name;
 	return (kern_shm_open2(td, uap->path, uap->flags, uap->mode,
-	    uap->shmflags, NULL, uap->name, NULL));
+	    uap->shmflags, NULL, namep, NULL));
 }
 
 int
