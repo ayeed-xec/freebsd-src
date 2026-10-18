@@ -51,6 +51,7 @@
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
+#include <vm/swap_pager.h>
 #include <sys/sysctl.h>
 
 struct vmmeter __read_mostly vm_cnt = {
@@ -137,6 +138,29 @@ sysctl_vm_loadavg(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_vm, VM_LOADAVG, loadavg, CTLTYPE_STRUCT | CTLFLAG_RD |
     CTLFLAG_MPSAFE, NULL, 0, sysctl_vm_loadavg, "S,loadavg",
     "Machine loadaverage history");
+
+static int
+sysctl_vm_sysinfo(SYSCTL_HANDLER_ARGS)
+{
+	struct vmsysinfo vs;
+	int swaptotal, swapused;
+
+	memset(&vs, 0, sizeof(vs));
+	vs.vs_physmem = ptoa((uint64_t)physmem);
+	vs.vs_free = ptoa((uint64_t)vm_free_count());
+	swap_pager_status(&swaptotal, &swapused);
+	vs.vs_swaptotal = ptoa((uint64_t)swaptotal);
+	vs.vs_swapfree = ptoa((uint64_t)(swaptotal - swapused));
+	vs.vs_ldavg[0] = averunnable.ldavg[0];
+	vs.vs_ldavg[1] = averunnable.ldavg[1];
+	vs.vs_ldavg[2] = averunnable.ldavg[2];
+	vs.vs_fscale = averunnable.fscale;
+	vs.vs_nprocs = nprocs;
+	return (SYSCTL_OUT(req, &vs, sizeof(vs)));
+}
+SYSCTL_PROC(_vm, VM_SYSINFO, sysinfo, CTLTYPE_OPAQUE | CTLFLAG_RD |
+    CTLFLAG_MPSAFE, NULL, 0, sysctl_vm_sysinfo, "S,vmsysinfo",
+    "System load, memory, swap and process counts");
 
 #if defined(COMPAT_FREEBSD11)
 struct vmtotal11 {

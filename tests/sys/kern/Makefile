@@ -58,6 +58,7 @@ ATF_TESTS_C+=	subr_physmem_test
 .endif
 PLAIN_TESTS_C+=	subr_unit_test
 ATF_TESTS_C+=	sysctl_kern_proc
+ATF_TESTS_C+=	sysctl_kern_utsname
 ATF_TESTS_C+=	syncfs_test
 ATF_TESTS_C+=	sys_getrandom
 ATF_TESTS_C+=	thr_name_test
@@ -108,6 +109,7 @@ CFLAGS.sys_getrandom+=			-I${SRCTOP}/sys/contrib/zstd/lib
 LIBADD.sys_getrandom+=			zstd
 LIBADD.sys_getrandom+=			c
 LIBADD.sys_getrandom+=			pthread
+LIBADD.sysctl_kern_utsname+=		jail
 LIBADD.ptrace_test+=			pthread
 LIBADD.unix_seqpacket_test+=		pthread
 LIBADD.inotify_test+=			util

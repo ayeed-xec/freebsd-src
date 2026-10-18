@@ -46,6 +46,7 @@
 #include <sys/kernel.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/random.h>
@@ -57,6 +58,7 @@
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/unistd.h>
+#include <sys/utsname.h>
 
 #include <vm/vm_param.h>
 
@@ -557,6 +559,49 @@ sysctl_osrelease(SYSCTL_HANDLER_ARGS)
 SYSCTL_PROC(_kern, KERN_OSRELEASE, osrelease,
     CTLTYPE_STRING | CTLFLAG_CAPRD | CTLFLAG_RD | CTLFLAG_MPSAFE,
     NULL, 0, sysctl_osrelease, "A", "Operating system release");
+
+/*
+ * Return the uname(3) names and the NIS domain name in one read.  Each field
+ * has the value that its own sysctl gives to the caller, cut to fit.
+ */
+static int
+sysctl_kern_utsname(SYSCTL_HANDLER_ARGS)
+{
+	struct xutsname *xu;
+	struct prison *pr;
+	size_t len;
+	int error, mib[2];
+
+	xu = malloc(sizeof(*xu), M_TEMP, M_WAITOK | M_ZERO);
+	strlcpy(xu->xu_sysname, ostype, sizeof(xu->xu_sysname));
+	pr = req->td->td_ucred->cr_prison;
+	mtx_lock(&pr->pr_mtx);
+	strlcpy(xu->xu_nodename, pr->pr_hostname, sizeof(xu->xu_nodename));
+	strlcpy(xu->xu_domainname, pr->pr_domainname,
+	    sizeof(xu->xu_domainname));
+	mtx_unlock(&pr->pr_mtx);
+	strlcpy(xu->xu_release, pr->pr_osrelease, sizeof(xu->xu_release));
+	strlcpy(xu->xu_version, version, sizeof(xu->xu_version));
+
+	/*
+	 * hw.machine is machine-dependent and can depend on the ABI of the
+	 * caller, so ask that node.  The last byte stays NUL.
+	 */
+	mib[0] = CTL_HW;
+	mib[1] = HW_MACHINE;
+	len = sizeof(xu->xu_machine) - 1;
+	error = kernel_sysctl(req->td, mib, nitems(mib), xu->xu_machine, &len,
+	    NULL, 0, NULL, req->flags & SCTL_MASK32);
+	if (error == 0 || error == ENOMEM)
+		error = SYSCTL_OUT(req, xu, sizeof(*xu));
+	free(xu, M_TEMP);
+	return (error);
+}
+
+SYSCTL_PROC(_kern, KERN_UTSNAME, utsname,
+    CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_MPSAFE, NULL, 0,
+    sysctl_kern_utsname, "S,xutsname",
+    "Operating system names and NIS domain name");
 
 /*
  * The osreldate number is copied from the global (osreldate in vers.c) into

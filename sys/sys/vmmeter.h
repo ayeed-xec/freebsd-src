@@ -58,6 +58,22 @@ struct vmtotal {
 	uint16_t	t_pad[3];
 };
 
+/*
+ * The vm.sysinfo sysctl: the load averages and the memory, swap and process
+ * counts of the system in one read.  The layout is the same for 32-bit and
+ * 64-bit processes.
+ */
+struct vmsysinfo {
+	uint64_t	vs_physmem;	/* physical memory, bytes */
+	uint64_t	vs_free;	/* free memory, bytes */
+	uint64_t	vs_swaptotal;	/* swap space, bytes */
+	uint64_t	vs_swapfree;	/* free swap space, bytes */
+	uint32_t	vs_ldavg[3];	/* load averages, scaled by vs_fscale */
+	uint32_t	vs_fscale;	/* scale of vs_ldavg */
+	uint32_t	vs_nprocs;	/* number of processes */
+	uint32_t	vs_spare[3];	/* zero */
+};
+
 #if defined(_KERNEL) || defined(_WANT_VMMETER)
 #include <sys/counter.h>
 

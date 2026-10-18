@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd July 31, 2025
+.Dd October 19, 2026
 .Dt SYSCTL 3
 .Os
 .Sh NAME
@@ -356,6 +356,7 @@ information.
 .It Dv KERN_SECURELVL Ta integer Ta raise only
 .It Dv KERN_UPDATEINTERVAL Ta integer Ta no
 .It Dv KERN_USRSTACK Ta integer Ta no
+.It Dv KERN_UTSNAME Ta struct xutsname Ta no
 .It Dv KERN_VERSION Ta string Ta no
 .El
 .Bl -tag -width 6n
@@ -611,6 +612,22 @@ This level may be raised by processes with appropriate privilege.
 It may not be lowered.
 .It Li KERN_USRSTACK
 Reports the top of the main thread user stack for the current process.
+.It Li KERN_UTSNAME
+Return the values of
+.Dv KERN_OSTYPE ,
+.Dv KERN_HOSTNAME ,
+.Dv KERN_OSRELEASE ,
+.Dv KERN_VERSION ,
+.Dv HW_MACHINE
+and
+.Dv KERN_NISDOMAINNAME
+for the caller in one read.
+The returned data consists of a
+.Va struct xutsname ,
+defined in
+.In sys/utsname.h .
+Each field is terminated by a NUL byte and padded with NUL bytes;
+a longer value is truncated.
 .It Li KERN_VERSION
 The system version string.
 .El
@@ -832,6 +849,7 @@ privilege may change the value.
 .It Sy Second Level Name Ta Sy Type Ta Sy Changeable
 .It Dv VM_LOADAVG Ta struct loadavg Ta no
 .It Dv VM_TOTAL Ta struct vmtotal Ta no
+.It Dv VM_SYSINFO Ta struct vmsysinfo Ta no
 .It Dv VM_SWAPPING_ENABLED Ta integer Ta maybe
 .It Dv VM_V_FREE_MIN Ta integer Ta yes
 .It Dv VM_V_FREE_RESERVED Ta integer Ta yes
@@ -849,6 +867,13 @@ The returned data consists of a
 Return the system wide virtual memory statistics.
 The returned data consists of a
 .Va struct vmtotal .
+.It Li VM_SYSINFO
+Return the load averages, the physical, free and swap memory in bytes,
+and the number of processes in one read.
+The returned data consists of a
+.Va struct vmsysinfo ,
+defined in
+.In sys/vmmeter.h .
 .It Li VM_SWAPPING_ENABLED
 1 if process swapping is enabled or 0 if disabled.
 This variable is

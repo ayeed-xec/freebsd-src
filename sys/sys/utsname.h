@@ -53,6 +53,23 @@ struct utsname {
 
 #include <sys/cdefs.h>
 
+#if __BSD_VISIBLE
+#define	XUTSNAMELEN	256		/* Size of each xutsname field. */
+
+/*
+ * The kern.utsname sysctl: the uname(3) names and the NIS domain name of
+ * the caller in one read.  Each field holds the value of its own sysctl.
+ */
+struct xutsname {
+	char	xu_sysname[XUTSNAMELEN];	/* kern.ostype */
+	char	xu_nodename[XUTSNAMELEN];	/* kern.hostname */
+	char	xu_release[XUTSNAMELEN];	/* kern.osrelease */
+	char	xu_version[XUTSNAMELEN];	/* kern.version */
+	char	xu_machine[XUTSNAMELEN];	/* hw.machine */
+	char	xu_domainname[XUTSNAMELEN];	/* kern.domainname */
+};
+#endif
+
 #ifndef _KERNEL
 __BEGIN_DECLS
 int	__xuname(int, void *);		/* Variable record size. */

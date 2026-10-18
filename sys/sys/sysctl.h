@@ -1025,6 +1025,7 @@ TAILQ_HEAD(sysctl_ctx_list, sysctl_ctx_entry);
 #define	KERN_ARND		37	/* int: from arc4rand() */
 #define	KERN_MAXPHYS		38	/* int: MAXPHYS value */
 #define	KERN_LOCKF		39	/* struct: lockf reports */
+#define	KERN_UTSNAME		40	/* struct: struct xutsname */
 /*
  * KERN_PROC subtypes
  */

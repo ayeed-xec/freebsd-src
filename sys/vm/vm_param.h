@@ -83,7 +83,8 @@
 #define	VM_OBSOLETE_10		10	/* pageout algorithm */
 #define VM_SWAPPING_ENABLED	11	/* swapping enabled */
 #define VM_OVERCOMMIT		12	/* vm.overcommit */
-#define	VM_MAXID		13	/* number of valid vm ids */
+#define	VM_SYSINFO		13	/* struct vmsysinfo */
+#define	VM_MAXID		14	/* number of valid vm ids */
 
 /*
  * Structure for swap device statistics
