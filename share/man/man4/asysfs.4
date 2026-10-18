@@ -1,0 +1,119 @@
+.\"
+.\" Copyright (c) 2026 Ayeed Shaikh <Ayeed.AI10@race.reva.edu.in>
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd October 18, 2026
+.Dt ASYSFS 4
+.Os
+.Sh NAME
+.Nm asysfs
+.Nd system file system in the layout of Android
+.Sh SYNOPSIS
+To load the file system as a module at boot time, place the following
+line in
+.Xr loader.conf 5 :
+.Bd -literal -offset indent
+asysfs_load="YES"
+.Ed
+.Pp
+To mount it in a jail, add a line such as the following to
+.Xr jail.conf 5 :
+.Bd -literal -offset indent
+mount += "asysfs $path/sys asysfs ro 0 0";
+.Ed
+.Sh DESCRIPTION
+The
+.Nm
+file system gives a
+.Pa /sys
+tree with the names and the text layout that Android programs read
+on Linux.
+It is intended for a jail that runs Android programs on the native
+.Fx
+ABI, together with
+.Xr aprocfs 4 .
+It does not use the
+.Xr linux 4
+ABI.
+A program sees
+.Nm
+only where it is mounted.
+.Pp
+The file system contains:
+.Bl -tag -width "devices/system/cpu/possible"
+.It Pa devices/system/cpu/online
+The CPUs that run threads, in the list format of
+.Xr cpuset 1 ,
+for example
+.Ql 0-3 ,
+and a newline.
+The number of CPUs in the list is the
+.Va hw.ncpu
+value.
+.It Pa devices/system/cpu/present
+The same list as
+.Pa online :
+.Fx
+has no CPU hot plug.
+.It Pa devices/system/cpu/possible
+The range from 0 to the
+.Va kern.smp.maxid
+value, and a newline.
+.El
+.Pp
+All files are read-only.
+.Nm
+is a
+.Xr pseudofs 9
+file system.
+.Sh EXAMPLES
+To mount an
+.Nm
+file system on
+.Pa /compat/android/sys :
+.Pp
+.Dl "mount -t asysfs asysfs /compat/android/sys"
+.Sh SEE ALSO
+.Xr cpuset 1 ,
+.Xr mount 2 ,
+.Xr aprocfs 4 ,
+.Xr jail.conf 5 ,
+.Xr jail 8 ,
+.Xr mount 8 ,
+.Xr pseudofs 9
+.Sh HISTORY
+The
+.Nm
+file system first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
+.Sh AUTHORS
+.An Ayeed Shaikh Aq Mt Ayeed.AI10@race.reva.edu.in
+.Sh BUGS
+.Xr fsync 2
+on an
+.Nm
+node returns 0, as on every
+.Xr pseudofs 9
+file system.

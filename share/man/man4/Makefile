@@ -57,6 +57,7 @@ MAN=	aac.4 \
 	arcmsr.4 \
 	arswitch.4 \
 	${_asmc.4} \
+	asysfs.4 \
 	at45d.4 \
 	ata.4 \
 	ath.4 \

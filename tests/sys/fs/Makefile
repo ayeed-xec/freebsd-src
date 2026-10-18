@@ -10,6 +10,7 @@ TESTSRC=		${SRCTOP}/contrib/netbsd-tests/fs
 #TESTS_SUBDIRS+=	nullfs	# XXX: needs rump
 # fusefs tests cannot be compiled/used without the googletest infrastructure.
 TESTS_SUBDIRS+=		aprocfs
+TESTS_SUBDIRS+=		asysfs
 TESTS_SUBDIRS+=		fdescfs
 .if ${COMPILER_FEATURES:Mc++14} && ${MK_GOOGLETEST} != "no"
 TESTS_SUBDIRS+=		fusefs
