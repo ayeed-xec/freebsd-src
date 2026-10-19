@@ -860,8 +860,14 @@ vop_delayed_setsize {
 # be added above these spares.  When merging a new VOP to a stable branch,
 # the new VOP should replace one of the spares.
 
-vop_spare1 {
-	IN struct vnode *vp;
+%% tmpfile	dvp	E E E
+%% tmpfile	vpp	- L -
+
+vop_tmpfile {
+	IN struct vnode *dvp;
+	OUT struct vnode **vpp;
+	IN struct componentname *cnp;
+	IN struct vattr *vap;
 };
 
 vop_spare2 {

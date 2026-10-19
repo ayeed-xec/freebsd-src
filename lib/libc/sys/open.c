@@ -41,7 +41,7 @@ open(const char *path, int flags, ...)
 	va_list ap;
 	int mode;
 
-	if ((flags & O_CREAT) != 0) {
+	if ((flags & (O_CREAT | O_TMPFILE)) != 0) {
 		va_start(ap, flags);
 		mode = va_arg(ap, int);
 		va_end(ap);

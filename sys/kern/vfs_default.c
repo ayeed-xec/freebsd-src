@@ -135,6 +135,7 @@ struct vop_vector default_vnodeops = {
 	.vop_rename =		vop_norename,
 	.vop_revoke =		VOP_PANIC,
 	.vop_strategy =		vop_nostrategy,
+	.vop_tmpfile =		VOP_EOPNOTSUPP,
 	.vop_unlock =		vop_stdunlock,
 	.vop_vptocnp =		vop_stdvptocnp,
 	.vop_vptofh =		vop_stdvptofh,

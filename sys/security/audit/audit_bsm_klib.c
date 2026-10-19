@@ -210,6 +210,9 @@ audit_flags_and_error_to_openevent(int oflags, int error)
 {
 	int i;
 
+	if ((oflags & O_TMPFILE) != 0)
+		oflags |= O_CREAT;
+
 	/*
 	 * Need to check only those flags we care about.
 	 */
@@ -225,6 +228,9 @@ au_event_t
 audit_flags_and_error_to_openatevent(int oflags, int error)
 {
 	int i;
+
+	if ((oflags & O_TMPFILE) != 0)
+		oflags |= O_CREAT;
 
 	/*
 	 * Need to check only those flags we care about.

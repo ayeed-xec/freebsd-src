@@ -151,8 +151,9 @@ struct inode {
 #define	IN_SIZEMOD	0x1000		/* Inode size has been modified */
 #define	IN_ENDOFF	0x2000		/* Free space at the end of directory,
 					   try to truncate when possible */
+#define	IN_TMPFILE	0x4000		/* Unnamed file may acquire a link. */
 
-#define PRINT_INODE_FLAGS "\20\20b16\17b15\16b14\15sizemod" \
+#define PRINT_INODE_FLAGS "\20\20b16\17tmpfile\16b14\15sizemod" \
 	"\14iblkdata\13is_ufs2\12truncated\11ea_lockwait\10ea_locked" \
 	"\7lazyaccess\6lazymod\5needsync\4modified\3update\2change\1access"
 

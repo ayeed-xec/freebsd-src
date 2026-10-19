@@ -1185,7 +1185,7 @@ flags_to_rights(int flags, cap_rights_t *rightsp)
 		}
 	}
 
-	if (flags & O_CREAT)
+	if ((flags & (O_CREAT | O_TMPFILE)) != 0)
 		cap_rights_set_one(rightsp, CAP_CREATE);
 
 	if (flags & O_TRUNC)
@@ -4838,7 +4838,7 @@ kern_fhopen(struct thread *td, const struct fhandle *u_fhp, int flags)
 		return (error);
 
 	indx = -1;
-	if ((flags & O_CREAT) != 0)
+	if ((flags & (O_CREAT | O_TMPFILE)) != 0)
 		return (EINVAL);
 	error = openflags(&flags);
 	if (error != 0)

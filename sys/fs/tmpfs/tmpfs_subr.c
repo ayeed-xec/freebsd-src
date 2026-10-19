@@ -328,6 +328,7 @@ tmpfs_node_ctor(void *mem, int size, void *arg, int flags)
 	node->tn_accessed = false;
 	node->tn_flags = 0;
 	node->tn_links = 0;
+	node->tn_tmpfile = TMPFS_TMPFILE_NONE;
 	node->tn_vnode = NULL;
 	node->tn_vpstate = 0;
 	return (0);

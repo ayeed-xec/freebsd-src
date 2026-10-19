@@ -148,6 +148,10 @@ typedef	__pid_t		pid_t;
 #define	O_CLOFORK	0x08000000
 #endif
 
+#if __BSD_VISIBLE
+#define	O_TMPFILE	0x10000000	/* create an unnamed regular file */
+#endif
+
 /*
  * !!! DANGER !!!
  *
@@ -176,7 +180,7 @@ typedef	__pid_t		pid_t;
     O_EXLOCK | O_ASYNC | O_SYNC | O_NOFOLLOW | O_CREAT | O_TRUNC | \
     O_EXCL | O_NOCTTY | O_DIRECT | O_DIRECTORY | O_EXEC | O_TTY_INIT | \
     O_CLOEXEC | O_VERIFY | O_PATH | O_RESOLVE_BENEATH | O_DSYNC | \
-    O_EMPTY_PATH | O_NAMEDATTR | O_CLOFORK)
+    O_EMPTY_PATH | O_NAMEDATTR | O_CLOFORK | O_TMPFILE)
 
 /* convert from open() flags to/from fflags; convert O_RD/WR to FREAD/FWRITE */
 #define	FFLAGS(oflags)	((oflags) & O_EXEC ? (oflags) : (oflags) + 1)

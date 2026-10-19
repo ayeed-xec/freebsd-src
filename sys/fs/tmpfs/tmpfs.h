@@ -199,6 +199,7 @@ struct tmpfs_node {
 	 */
 	uint8_t			tn_status;	/* (vi) */
 	uint8_t			tn_accessed;	/* unlocked */
+	uint8_t			tn_tmpfile;	/* (v) unnamed file state */
 
 	/*
 	 * The node size.  It does not necessarily match the real amount
@@ -360,6 +361,11 @@ LIST_HEAD(tmpfs_node_list, tmpfs_node);
 #define TMPFS_VNODE_WANT	2
 #define TMPFS_VNODE_DOOMED	4
 #define	TMPFS_VNODE_WRECLAIM	8
+
+/* tn_tmpfile; changed only with the vnode locked exclusively. */
+#define	TMPFS_TMPFILE_NONE	0
+#define	TMPFS_TMPFILE_LINKABLE	1
+#define	TMPFS_TMPFILE_UNLINKABLE	2
 
 /* tn_status */
 #define	TMPFS_NODE_MODIFIED	0x01

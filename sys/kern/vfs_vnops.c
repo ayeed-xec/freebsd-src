@@ -126,6 +126,8 @@ const struct fileops vnops = {
 };
 
 const u_int io_hold_cnt = 16;
+static int vn_open_tmpfile(struct nameidata *, int, int, u_int, struct ucred *);
+
 static int vn_io_fault_enable = 1;
 SYSCTL_INT(_debug, OID_AUTO, vn_io_fault_enable, CTLFLAG_RWTUN,
     &vn_io_fault_enable, 0, "Enable vn_io_fault lock avoidance");
@@ -242,6 +244,97 @@ vfs_check_namedattr(struct vnode *vp)
 }
 
 /*
+ * Create an unnamed file while holding the directory lock exclusively.
+ * Return the new vnode locked, as for a named create.
+ */
+static int
+vn_open_tmpfile(struct nameidata *ndp, int fmode, int cmode,
+    u_int vn_open_flags, struct ucred *cred)
+{
+	struct componentname cn;
+	struct vattr va;
+	struct mount *mp;
+	struct vnode *dvp, *vp;
+	int error;
+
+restart:
+	ndp->ni_cnd.cn_nameiop = LOOKUP;
+	ndp->ni_cnd.cn_flags = open2nameif(fmode, vn_open_flags,
+	    ndp->ni_cnd.cn_flags) &
+	    ~(ISOPEN | OPENREAD | OPENWRITE | LOCKSHARED);
+	if ((vn_open_flags & VN_OPEN_INVFS) == 0)
+		bwillwrite();
+	error = namei(ndp);
+	if (error != 0)
+		return (error);
+	dvp = ndp->ni_vp;
+	ASSERT_VOP_ELOCKED(dvp, "vn_open_tmpfile");
+	if (dvp->v_type == VLNK) {
+		error = EMLINK;
+		goto out;
+	}
+	if (dvp->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+	error = VOP_GETATTR(dvp, &va, cred);
+	if (error != 0)
+		goto out;
+	if (va.va_nlink == 0) {
+		error = ENOENT;
+		goto out;
+	}
+	if ((dvp->v_mount->mnt_flag & MNT_RDONLY) != 0) {
+		error = EROFS;
+		goto out;
+	}
+	if ((va.va_flags & IMMUTABLE) != 0) {
+		error = EPERM;
+		goto out;
+	}
+	error = VOP_ACCESS(dvp, VWRITE | VEXEC, cred, curthread);
+	if (error != 0)
+		goto out;
+	if (vn_start_write(dvp, &mp, V_NOWAIT) != 0) {
+		vput(dvp);
+		NDFREE_PNBUF(ndp);
+		error = vn_start_write(NULL, &mp, V_XSLEEP | V_PCATCH);
+		if (error != 0)
+			return (error);
+		NDREINIT(ndp);
+		goto restart;
+	}
+	cn = ndp->ni_cnd;
+	cn.cn_nameiop = CREATE;
+	cn.cn_flags = ISLASTCN;
+	cn.cn_nameptr = __DECONST(char *, "");
+	cn.cn_namelen = 0;
+	cn.cn_cred = cred;
+	VATTR_NULL(&va);
+	va.va_type = VREG;
+	va.va_mode = cmode;
+	if ((fmode & O_EXCL) != 0)
+		va.va_vaflags |= VA_EXCLUSIVE;
+	vp = NULL;
+#ifdef MAC
+	error = mac_vnode_check_create(cred, dvp, &cn, &va);
+	if (error == 0)
+#endif
+		error = VOP_TMPFILE(dvp, &vp, &cn, &va);
+	VOP_VPUT_PAIR(dvp, error == 0 ? &vp : NULL, false);
+	vn_finished_write(mp);
+	ndp->ni_vp = vp;
+	if (error != 0)
+		NDFREE_PNBUF(ndp);
+	return (error);
+out:
+	vput(dvp);
+	ndp->ni_vp = NULL;
+	NDFREE_PNBUF(ndp);
+	return (error);
+}
+
+/*
  * Common code for vnode open operations via a name lookup.
  * Lookup the vnode and invoke VOP_CREATE if needed.
  * Check permissions, and call the VOP_OPEN or VOP_CREATE routine.
@@ -263,7 +356,16 @@ vn_open_cred(struct nameidata *ndp, int *flagp, int cmode, u_int vn_open_flags,
 restart:
 	first_open = false;
 	fmode = *flagp;
-	if ((fmode & (O_CREAT | O_EXCL | O_DIRECTORY)) == (O_CREAT |
+	if ((fmode & O_TMPFILE) != 0) {
+		if ((fmode & FWRITE) == 0 ||
+		    (fmode & (O_CREAT | O_EXEC | O_PATH | O_NAMEDATTR)) != 0)
+			return (EINVAL);
+		error = vn_open_tmpfile(ndp, fmode, cmode, vn_open_flags, cred);
+		if (error != 0)
+			return (error);
+		vp = ndp->ni_vp;
+		fmode = (fmode | O_CREAT) & ~(O_DIRECTORY | O_TRUNC);
+	} else if ((fmode & (O_CREAT | O_EXCL | O_DIRECTORY)) == (O_CREAT |
 	    O_EXCL | O_DIRECTORY) ||
 	    (fmode & (O_CREAT | O_EMPTY_PATH)) == (O_CREAT | O_EMPTY_PATH))
 		return (EINVAL);

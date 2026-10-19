@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd May 17, 2025
+.Dd October 19, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -52,7 +52,8 @@ The
 argument may indicate the file is to be
 created if it does not exist (by specifying the
 .Dv O_CREAT
-flag).
+flag), or created without a name (by specifying
+.Dv O_TMPFILE ) .
 In this case
 .Fn open
 and
@@ -158,7 +159,6 @@ The
 are formed by
 .Em or Ns 'ing
 the following values:
-.Pp
 .Bl -tag -width O_RESOLVE_BENEATH
 .It Dv O_RDONLY
 open for reading only
@@ -180,6 +180,8 @@ do not block on open
 set file pointer to the end of the file before each write
 .It Dv O_CREAT
 create file if it does not exist
+.It Dv O_TMPFILE
+create an unnamed regular file in the specified directory
 .It Dv O_TRUNC
 truncate size to 0
 .It Dv O_EXCL
@@ -215,22 +217,72 @@ automatically close file on any child process created with
 .Fn fork 2
 .It Dv O_VERIFY
 verify the contents of the file with
-.Xr mac_veriexec 4
+.Xr veriexec 4
 .It Dv O_RESOLVE_BENEATH
-.Pq Xr openat 2 only
+.Pq Fn openat only
 path resolution must not cross the
 .Fa fd
 directory
 .It Dv O_PATH
 record only the target path in the opened descriptor
 .It Dv O_EMPTY_PATH
-.Pq Xr openat 2 only
+.Pq Fn openat only
 open file referenced by
 .Fa fd
 if path is empty
 .It Dv O_NAMEDATTR
 open a named attribute or named attribute directory
 .El
+.Pp
+The
+.Dv O_TMPFILE
+flag creates a regular file with a link count of zero on the file system
+containing the directory named by
+.Fa path .
+The directory entries do not change.
+The caller must have write and search permission on the directory.
+The mode and umask apply as for
+.Dv O_CREAT ,
+and the creator can open the new file even with mode zero.
+Specify either
+.Dv O_WRONLY
+or
+.Dv O_RDWR
+and supply the
+.Fa mode
+argument.
+The flags
+.Dv O_CREAT , O_EXEC , O_SEARCH , O_PATH ,
+and
+.Dv O_NAMEDATTR
+are incompatible with
+.Dv O_TMPFILE .
+The
+.Dv O_DIRECTORY
+flag has no additional effect.
+.Pp
+An unnamed file is removed when its last reference is released.
+Unless
+.Dv O_EXCL
+was specified, a caller with the required privilege can use
+.Xr linkat 2
+with
+.Dv AT_EMPTY_PATH
+to give the file a name.
+After that name and any other links have been removed, the file cannot
+acquire a new link.
+The
+.Dv O_EXCL
+flag prevents the file from ever acquiring a name.
+.Pp
+The
+.Dv O_TMPFILE
+flag requires
+.Dv CAP_CREATE
+on a capability directory descriptor.
+It is supported by tmpfs and UFS with or without soft updates,
+but not by UFS with soft-updates journaling or gjournal.
+Nullfs forwards the operation to its lower file system.
 .Pp
 Exactly one of the flags
 .Dv O_RDONLY ,
@@ -263,7 +315,7 @@ This may be used to
 implement a simple exclusive access locking mechanism.
 In all other cases, the file is created
 and the access permission bits (see
-.Xr chmod 2)
+.Xr chmod 2 )
 of the file mode
 are set to the value of the third argument taken as
 .Fa "mode_t mode"
@@ -467,8 +519,8 @@ message
 .It Xr kqueue 2
 only with
 .Dv EVFILT_VNODE
-.It Xr __acl_get_fd 2
-.It Xr __acl_aclcheck_fd 2
+.It Fn __acl_get_fd
+.It Fn __acl_aclcheck_fd
 .It Xr extattr 2
 .It Xr capsicum 4
 can be passed to
@@ -602,6 +654,42 @@ to indicate the error.
 .Sh ERRORS
 The named file is opened unless:
 .Bl -tag -width Er
+.It Bq Er EINVAL
+.Dv O_TMPFILE
+was specified without write access, or together with
+.Dv O_CREAT , O_EXEC , O_SEARCH , O_PATH ,
+or
+.Dv O_NAMEDATTR .
+.It Bq Er ENOTDIR
+.Dv O_TMPFILE
+was specified and the path does not name a directory.
+.It Bq Er ENOENT
+.Dv O_TMPFILE
+was specified and the directory has been removed.
+.It Bq Er EACCES
+.Dv O_TMPFILE
+was specified and write or search permission on the directory is denied,
+or a mandatory access control policy denies creation.
+.It Bq Er EPERM
+.Dv O_TMPFILE
+was specified and the directory is immutable.
+.It Bq Er EROFS
+.Dv O_TMPFILE
+was specified on a read-only file system.
+.It Bq Er EOPNOTSUPP
+.Dv O_TMPFILE
+was specified on a file system that does not support unnamed files.
+.It Bq Er ENOSPC
+.Dv O_TMPFILE
+was specified and no inode or space is available for the new file.
+.It Bq Er EDQUOT
+.Dv O_TMPFILE
+was specified and the inode quota would be exceeded.
+.It Bq Er ENOTCAPABLE
+.Dv O_TMPFILE
+was specified and the directory descriptor lacks
+.Dv CAP_CREATE
+or another required right.
 .It Bq Er ENOTDIR
 A component of the path prefix is not a directory.
 .It Bq Er ENAMETOOLONG
@@ -838,6 +926,11 @@ directory or named attribute.
 .Xr capsicum 4 ,
 .Xr named_attribute 7
 .Sh STANDARDS
+The
+.Dv O_TMPFILE
+flag is an extension compatible with the unnamed-file interface of Linux.
+Its numeric value is specific to this fork.
+.Pp
 These functions are specified by
 .St -p1003.1-2008 .
 .Pp
@@ -875,6 +968,11 @@ which specifies that behavior for
 in the absence of the flag the implementation checks the current
 permissions of a directory.
 .Sh HISTORY
+The
+.Dv O_TMPFILE
+flag first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
+.Pp
 The
 .Fn open
 function appeared in

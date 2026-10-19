@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd March 30, 2021
+.Dd October 19, 2026
 .Dt LINK 2
 .Os
 .Sh NAME
@@ -160,6 +160,16 @@ flag, if
 names a symbolic link, a new link is created for the symbolic link
 .Fa name1
 and not its target.
+.Pp
+An unnamed file created with
+.Dv O_TMPFILE
+can acquire a name through
+.Dv AT_EMPTY_PATH
+unless it was created with
+.Dv O_EXCL .
+The privilege requirement also applies to unnamed files.
+After the file has acquired a name, ordinary hard links are permitted.
+Once all those links are removed, the file cannot acquire a new link.
 .Sh RETURN VALUES
 .Rv -std link
 .Sh ERRORS
@@ -175,6 +185,10 @@ A component of either pathname exceeded 255 characters,
 or entire length of either path name exceeded 1023 characters.
 .It Bq Er ENOENT
 A component of either path prefix does not exist.
+.It Bq Er ENOENT
+An unnamed file was created with
+.Dv O_TMPFILE | O_EXCL ,
+or the file acquired a name and subsequently lost all its links.
 .It Bq Er EOPNOTSUPP
 The file system containing the file named by
 .Fa name1
@@ -288,6 +302,7 @@ flag was specified.
 .El
 .Sh SEE ALSO
 .Xr chflags 2 ,
+.Xr open 2 ,
 .Xr readlink 2 ,
 .Xr symlink 2 ,
 .Xr unlink 2
@@ -300,6 +315,11 @@ The
 .Fn linkat
 system call follows The Open Group Extended API Set 2 specification.
 .Sh HISTORY
+Support for files created with
+.Dv O_TMPFILE
+first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
+.Pp
 The
 .Fn link
 function appeared in

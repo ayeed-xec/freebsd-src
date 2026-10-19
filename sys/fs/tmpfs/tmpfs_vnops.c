@@ -73,6 +73,8 @@
 SYSCTL_DECL(_vfs_tmpfs);
 VFS_SMR_DECLARE;
 
+static vop_tmpfile_t tmpfs_tmpfile;
+
 static volatile int tmpfs_rename_restarts;
 SYSCTL_INT(_vfs_tmpfs, OID_AUTO, rename_restarts, CTLFLAG_RD,
     __DEVOLATILE(int *, &tmpfs_rename_restarts), 0,
@@ -286,6 +288,33 @@ tmpfs_mknod(struct vop_mknod_args *v)
 	return (tmpfs_alloc_file(dvp, vpp, vap, cnp, NULL));
 }
 
+static int
+tmpfs_tmpfile(struct vop_tmpfile_args *ap)
+{
+	struct tmpfs_mount *tm;
+	struct tmpfs_node *dnode, *node;
+	struct vnode *dvp;
+	int error;
+
+	dvp = ap->a_dvp;
+	ASSERT_VOP_ELOCKED(dvp, "tmpfs_tmpfile");
+	MPASS(ap->a_vap->va_type == VREG);
+	tm = VFS_TO_TMPFS(dvp->v_mount);
+	dnode = VP_TO_TMPFS_DIR(dvp);
+	*ap->a_vpp = NULL;
+	error = tmpfs_alloc_node(dvp->v_mount, tm, VREG,
+	    ap->a_cnp->cn_cred->cr_uid, dnode->tn_gid, ap->a_vap->va_mode,
+	    NULL, NULL, VNOVAL, &node);
+	if (error != 0)
+		return (error);
+	node->tn_tmpfile = (ap->a_vap->va_vaflags & VA_EXCLUSIVE) != 0 ?
+	    TMPFS_TMPFILE_UNLINKABLE : TMPFS_TMPFILE_LINKABLE;
+	error = tmpfs_alloc_vp(dvp->v_mount, node, LK_EXCLUSIVE, ap->a_vpp);
+	if (error != 0)
+		tmpfs_free_node(tm, node);
+	return (error);
+}
+
 struct fileops tmpfs_fnops;
 
 static int
@@ -305,7 +334,7 @@ tmpfs_open(struct vop_open_args *v)
 	 * (e.g. by a "rmdir $(pwd)").  It cannot be opened any more as
 	 * it is about to die.
 	 */
-	if (node->tn_links < 1)
+	if (node->tn_links < 1 && node->tn_tmpfile == TMPFS_TMPFILE_NONE)
 		return (ENOENT);
 
 	/* If the file is marked append-only, deny write requests. */
@@ -793,6 +822,10 @@ tmpfs_link(struct vop_link_args *v)
 
 	MPASS(dvp != vp); /* XXX When can this be false? */
 	node = VP_TO_TMPFS_NODE(vp);
+	ASSERT_VOP_ELOCKED(vp, "tmpfs_link");
+	if (node->tn_links == 0 &&
+	    node->tn_tmpfile == TMPFS_TMPFILE_UNLINKABLE)
+		return (ENOENT);
 
 	/* Ensure that we do not overflow the maximum number of links imposed
 	 * by the system. */
@@ -820,6 +853,8 @@ tmpfs_link(struct vop_link_args *v)
 	tmpfs_dir_attach(dvp, de);
 
 	/* vp link count has changed, so update node times. */
+	if (node->tn_tmpfile == TMPFS_TMPFILE_LINKABLE)
+		node->tn_tmpfile = TMPFS_TMPFILE_UNLINKABLE;
 	node->tn_status |= TMPFS_NODE_CHANGED;
 	tmpfs_update(vp);
 
@@ -2187,6 +2222,7 @@ struct vop_vector tmpfs_vnodeop_entries = {
 	.vop_lookup =			vfs_cache_lookup,
 	.vop_cachedlookup =		tmpfs_cached_lookup,
 	.vop_create =			tmpfs_create,
+	.vop_tmpfile =			tmpfs_tmpfile,
 	.vop_mknod =			tmpfs_mknod,
 	.vop_open =			tmpfs_open,
 	.vop_close =			tmpfs_close,

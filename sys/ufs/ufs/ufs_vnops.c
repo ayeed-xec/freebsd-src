@@ -110,7 +110,8 @@ static vop_getattr_t	ufs_getattr;
 static vop_ioctl_t	ufs_ioctl;
 static vop_link_t	ufs_link;
 static int ufs_makeinode(int mode, struct vnode *, struct vnode **,
-    struct componentname *, const char *);
+    struct componentname *, const char *, bool);
+static vop_tmpfile_t	ufs_tmpfile;
 static vop_mmapped_t	ufs_mmapped;
 static vop_mkdir_t	ufs_mkdir;
 static vop_mknod_t	ufs_mknod;
@@ -251,7 +252,7 @@ ufs_create(
 
 	error =
 	    ufs_makeinode(MAKEIMODE(ap->a_vap->va_type, ap->a_vap->va_mode),
-	    ap->a_dvp, ap->a_vpp, ap->a_cnp, "ufs_create");
+	    ap->a_dvp, ap->a_vpp, ap->a_cnp, "ufs_create", false);
 	if (error != 0)
 		return (error);
 	if ((ap->a_cnp->cn_flags & MAKEENTRY) != 0)
@@ -279,7 +280,7 @@ ufs_mknod(
 	int error;
 
 	error = ufs_makeinode(MAKEIMODE(vap->va_type, vap->va_mode),
-	    ap->a_dvp, vpp, ap->a_cnp, "ufs_mknod");
+	    ap->a_dvp, vpp, ap->a_cnp, "ufs_mknod", false);
 	if (error)
 		return (error);
 	ip = VTOI(*vpp);
@@ -1122,7 +1123,7 @@ ufs_link(
 	 * The file may have been removed after namei dropped the original
 	 * lock.
 	 */
-	if (ip->i_effnlink == 0) {
+	if (ip->i_effnlink == 0 && (ip->i_flag & IN_TMPFILE) == 0) {
 		error = ENOENT;
 		goto out;
 	}
@@ -1150,6 +1151,8 @@ ufs_link(
 		UFS_INODE_SET_FLAG(ip, IN_CHANGE);
 		if (DOINGSOFTDEP(vp))
 			softdep_revert_link(VTOI(tdvp), ip);
+	} else {
+		ip->i_flag &= ~IN_TMPFILE;
 	}
 out:
 	return (error);
@@ -2367,7 +2370,7 @@ ufs_symlink(
 	int len, error;
 
 	error = ufs_makeinode(IFLNK | ap->a_vap->va_mode, ap->a_dvp,
-	    vpp, ap->a_cnp, "ufs_symlink");
+	    vpp, ap->a_cnp, "ufs_symlink", false);
 	if (error)
 		return (error);
 	vp = *vpp;
@@ -2773,13 +2776,37 @@ ufs_vinit(struct mount *mntp, struct vop_vector *fifoops, struct vnode **vpp)
 	return (0);
 }
 
+static int
+ufs_tmpfile(struct vop_tmpfile_args *ap)
+{
+	struct inode *ip;
+	struct vnode *dvp;
+	int error;
+
+	dvp = ap->a_dvp;
+	ASSERT_VOP_ELOCKED(dvp, "ufs_tmpfile");
+	MPASS(ap->a_vap->va_type == VREG);
+	*ap->a_vpp = NULL;
+	if (DOINGSUJ(dvp) || (dvp->v_mount->mnt_flag & MNT_GJOURNAL) != 0)
+		return (EOPNOTSUPP);
+	error = ufs_makeinode(IFREG | ap->a_vap->va_mode, dvp, ap->a_vpp,
+	    ap->a_cnp, "ufs_tmpfile", true);
+	if (error == 0 && (ap->a_vap->va_vaflags & VA_EXCLUSIVE) == 0) {
+		ip = VTOI(*ap->a_vpp);
+		/* Only an exclusively locked vnode can change this state. */
+		ASSERT_VOP_ELOCKED(*ap->a_vpp, "ufs_tmpfile");
+		ip->i_flag |= IN_TMPFILE;
+	}
+	return (error);
+}
+
 /*
  * Allocate a new inode.
  * Vnode dvp must be locked.
  */
 static int
 ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
-    struct componentname *cnp, const char *callfunc)
+    struct componentname *cnp, const char *callfunc, bool tmpfile)
 {
 	struct inode *ip, *pdir;
 	struct direct newdir;
@@ -2878,10 +2905,10 @@ ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 	UFS_INODE_SET_MODE(ip, mode);
 	DIP_SET(ip, i_mode, mode);
 	tvp->v_type = IFTOVT(mode);	/* Rest init'd in getnewvnode(). */
-	ip->i_effnlink = 1;
-	ip->i_nlink = 1;
-	DIP_SET_NLINK(ip, 1);
-	if (DOINGSOFTDEP(tvp))
+	ip->i_effnlink = tmpfile ? 0 : 1;
+	ip->i_nlink = ip->i_effnlink;
+	DIP_SET_NLINK(ip, ip->i_nlink);
+	if (!tmpfile && DOINGSOFTDEP(tvp))
 		softdep_setup_create(VTOI(dvp), ip);
 	if ((ip->i_mode & ISGID) && !groupmember(ip->i_gid, cnp->cn_cred) &&
 	    priv_check_cred(cnp->cn_cred, PRIV_VFS_SETGID)) {
@@ -2921,10 +2948,12 @@ ufs_makeinode(int mode, struct vnode *dvp, struct vnode **vpp,
 			goto bad;
 	}
 #endif /* !UFS_ACL */
-	ufs_makedirentry(ip, cnp, &newdir);
-	error = ufs_direnter(dvp, tvp, &newdir, cnp, NULL);
-	if (error)
-		goto bad;
+	if (!tmpfile) {
+		ufs_makedirentry(ip, cnp, &newdir);
+		error = ufs_direnter(dvp, tvp, &newdir, cnp, NULL);
+		if (error != 0)
+			goto bad;
+	}
 	vn_seqc_write_end(tvp);
 	*vpp = tvp;
 	return (0);
@@ -2938,7 +2967,7 @@ bad:
 	ip->i_nlink = 0;
 	DIP_SET_NLINK(ip, 0);
 	UFS_INODE_SET_FLAG(ip, IN_CHANGE);
-	if (DOINGSOFTDEP(tvp))
+	if (!tmpfile && DOINGSOFTDEP(tvp))
 		softdep_revert_create(VTOI(dvp), ip);
 	vn_seqc_write_end(tvp);
 	vgone(tvp);
@@ -3000,6 +3029,7 @@ struct vop_vector ufs_vnodeops = {
 	.vop_cachedlookup =	ufs_lookup,
 	.vop_close =		ufs_close,
 	.vop_create =		ufs_create,
+	.vop_tmpfile =		ufs_tmpfile,
 	.vop_stat =		ufs_stat,
 	.vop_getattr =		ufs_getattr,
 	.vop_inactive =		ufs_inactive,
