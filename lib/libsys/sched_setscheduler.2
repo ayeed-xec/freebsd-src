@@ -22,7 +22,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd March 12, 1998
+.Dd October 19, 2026
 .Dt SCHED_SETSCHEDULER 2
 .Os
 .Sh NAME
@@ -74,6 +74,18 @@ If
 is zero, the scheduling policy and scheduling
 parameters are set for the calling process.
 .Pp
+Each thread has its own scheduling policy and scheduling parameters.
+A
+.Fa pid
+of zero denotes the calling thread.
+Thread identifiers
+.Pq see Xr thr_self 2
+are larger than all process identifiers, so a
+.Fa pid
+that is a thread identifier denotes that thread, in any process, and a
+.Fa pid
+that is a process identifier denotes the first thread of that process.
+.Pp
 In this implementation, the policy of when a process can affect
 the scheduling parameters of another process is specified in
 .St -p1003.1b-93
@@ -90,6 +102,34 @@ The standard time sharing scheduler;
 Round-robin scheduling across same priority processes.
 .El
 .Pp
+The flag
+.Dv SCHED_RESET_ON_FORK
+can be ORed with
+.Fa policy .
+A thread or process that a thread with this flag creates
+.Pq see Xr thr_new 2 , Xr fork 2 , Xr vfork 2 , Xr rfork 2 and Xr pdfork 2
+gets the
+.Dv SCHED_OTHER
+policy if the policy of the creating thread is
+.Dv SCHED_FIFO
+or
+.Dv SCHED_RR ,
+and a priority of zero if the priority of the creating thread is negative
+.Pq see Xr setpriority 2 .
+The new thread does not get the flag.
+A scheduling policy given to
+.Xr thr_new 2
+still applies.
+A
+.Fn sched_setscheduler
+call without the flag clears it.
+.Xr sched_setparam 2 ,
+.Xr rtprio 2
+and
+.Xr rtprio_thread 2
+keep the flag, and the flag stays across
+.Xr execve 2 .
+.Pp
 The
 .Vt sched_param
 structure is defined in
@@ -104,7 +144,10 @@ The
 .Fn sched_getscheduler
 system call returns the scheduling policy of the process specified
 by
-.Fa pid .
+.Fa pid ,
+ORed with
+.Dv SCHED_RESET_ON_FORK
+if the thread has that flag.
 .Pp
 If a process specified by
 .Fa pid
@@ -140,12 +183,14 @@ The system is not configured to support this functionality.
 The requesting process doesn not have permission as detailed in
 .St -p1003.1b-93 .
 .It Bq Er ESRCH
-No process can be found corresponding to that specified by
+No process or thread can be found corresponding to that specified by
 .Fa pid .
 .It Bq Er EINVAL
 The value of the
 .Fa policy
-argument is invalid, or one or more of the parameters contained in
+argument without
+.Dv SCHED_RESET_ON_FORK
+is invalid, or one or more of the parameters contained in
 .Fa param
 is outside the valid range for the specified scheduling policy.
 .El
@@ -155,7 +200,8 @@ is outside the valid range for the specified scheduling policy.
 .Xr sched_getparam 2 ,
 .Xr sched_rr_get_interval 2 ,
 .Xr sched_setparam 2 ,
-.Xr sched_yield 2
+.Xr sched_yield 2 ,
+.Xr thr_self 2
 .Sh STANDARDS
 The
 .Fn sched_setscheduler
@@ -163,3 +209,15 @@ and
 .Fn sched_getscheduler
 system calls conform to
 .St -p1003.1b-93 .
+Thread identifiers in
+.Fa pid
+and the
+.Dv SCHED_RESET_ON_FORK
+flag are extensions compatible with Linux.
+.Sh HISTORY
+Thread identifiers in
+.Fa pid
+and the
+.Dv SCHED_RESET_ON_FORK
+flag first appeared in the freebsd-android-native fork of
+.Fx 15.1 .

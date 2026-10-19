@@ -106,11 +106,15 @@ sched_attach(void)
 	return ret;
 }
 
+/*
+ * The id argument of these system calls is 0 for the calling thread, a
+ * thread id for that thread of any process, or a process id for the first
+ * thread of that process.  See tdfind_tidpid().
+ */
 int
 sys_sched_setparam(struct thread *td, struct sched_setparam_args *uap)
 {
 	struct thread *targettd;
-	struct proc *targetp;
 	int e;
 	struct sched_param sched_param;
 
@@ -118,19 +122,12 @@ sys_sched_setparam(struct thread *td, struct sched_setparam_args *uap)
 	if (e)
 		return (e);
 
-	if (uap->pid == 0) {
-		targetp = td->td_proc;
-		targettd = td;
-		PROC_LOCK(targetp);
-	} else {
-		targetp = pfind(uap->pid);
-		if (targetp == NULL)
-			return (ESRCH);
-		targettd = FIRST_THREAD_IN_PROC(targetp);
-	}
+	targettd = tdfind_tidpid(uap->pid);
+	if (targettd == NULL)
+		return (ESRCH);
 
 	e = kern_sched_setparam(td, targettd, &sched_param);
-	PROC_UNLOCK(targetp);
+	PROC_UNLOCK(targettd->td_proc);
 	return (e);
 }
 
@@ -157,22 +154,13 @@ sys_sched_getparam(struct thread *td, struct sched_getparam_args *uap)
 	int e;
 	struct sched_param sched_param;
 	struct thread *targettd;
-	struct proc *targetp;
 
-	if (uap->pid == 0) {
-		targetp = td->td_proc;
-		targettd = td;
-		PROC_LOCK(targetp);
-	} else {
-		targetp = pfind(uap->pid);
-		if (targetp == NULL) {
-			return (ESRCH);
-		}
-		targettd = FIRST_THREAD_IN_PROC(targetp);
-	}
+	targettd = tdfind_tidpid(uap->pid);
+	if (targettd == NULL)
+		return (ESRCH);
 
 	e = kern_sched_getparam(td, targettd, &sched_param);
-	PROC_UNLOCK(targetp);
+	PROC_UNLOCK(targettd->td_proc);
 	if (e == 0)
 		e = copyout(&sched_param, uap->param, sizeof(sched_param));
 	return (e);
@@ -200,26 +188,18 @@ sys_sched_setscheduler(struct thread *td, struct sched_setscheduler_args *uap)
 	int e;
 	struct sched_param sched_param;
 	struct thread *targettd;
-	struct proc *targetp;
 
 	e = copyin(uap->param, &sched_param, sizeof(sched_param));
 	if (e)
 		return (e);
 
-	if (uap->pid == 0) {
-		targetp = td->td_proc;
-		targettd = td;
-		PROC_LOCK(targetp);
-	} else {
-		targetp = pfind(uap->pid);
-		if (targetp == NULL)
-			return (ESRCH);
-		targettd = FIRST_THREAD_IN_PROC(targetp);
-	}
+	targettd = tdfind_tidpid(uap->pid);
+	if (targettd == NULL)
+		return (ESRCH);
 
 	e = kern_sched_setscheduler(td, targettd, uap->policy,
 	    &sched_param);
-	PROC_UNLOCK(targetp);
+	PROC_UNLOCK(targettd->td_proc);
 	return (e);
 }
 
@@ -240,9 +220,24 @@ kern_sched_setscheduler(struct thread *td, struct thread *targettd,
 
 	error = p_cansched(td, targetp);
 	if (error == 0)
-		error = ksched_setscheduler(ksched, targettd, policy,
+		error = ksched_setscheduler(ksched, targettd,
+		    policy & ~SCHED_RESET_ON_FORK,
 		    (const struct sched_param *)param);
-	return (error);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Fork and thread creation hold the process lock while the
+	 * scheduler copies the policy, so no new thread sees the new
+	 * policy with the old flag.
+	 */
+	thread_lock(targettd);
+	if ((policy & SCHED_RESET_ON_FORK) != 0)
+		targettd->td_flags |= TDF_RESETFORK;
+	else
+		targettd->td_flags &= ~TDF_RESETFORK;
+	thread_unlock(targettd);
+	return (0);
 }
 
 int
@@ -250,21 +245,16 @@ sys_sched_getscheduler(struct thread *td, struct sched_getscheduler_args *uap)
 {
 	int e, policy;
 	struct thread *targettd;
-	struct proc *targetp;
 
-	if (uap->pid == 0) {
-		targetp = td->td_proc;
-		targettd = td;
-		PROC_LOCK(targetp);
-	} else {
-		targetp = pfind(uap->pid);
-		if (targetp == NULL)
-			return (ESRCH);
-		targettd = FIRST_THREAD_IN_PROC(targetp);
-	}
+	targettd = tdfind_tidpid(uap->pid);
+	if (targettd == NULL)
+		return (ESRCH);
 
 	e = kern_sched_getscheduler(td, targettd, &policy);
-	PROC_UNLOCK(targetp);
+	/* TDF_RESETFORK changes only with the process lock held. */
+	if (e == 0 && (targettd->td_flags & TDF_RESETFORK) != 0)
+		policy |= SCHED_RESET_ON_FORK;
+	PROC_UNLOCK(targettd->td_proc);
 	if (e == 0)
 		td->td_retval[0] = policy;
 
@@ -336,21 +326,13 @@ kern_sched_rr_get_interval(struct thread *td, pid_t pid,
 {
 	int e;
 	struct thread *targettd;
-	struct proc *targetp;
 
-	if (pid == 0) {
-		targettd = td;
-		targetp = td->td_proc;
-		PROC_LOCK(targetp);
-	} else {
-		targetp = pfind(pid);
-		if (targetp == NULL)
-			return (ESRCH);
-		targettd = FIRST_THREAD_IN_PROC(targetp);
-	}
+	targettd = tdfind_tidpid(pid);
+	if (targettd == NULL)
+		return (ESRCH);
 
 	e = kern_sched_rr_get_interval_td(td, targettd, ts);
-	PROC_UNLOCK(targetp);
+	PROC_UNLOCK(targettd->td_proc);
 	return (e);
 }
 

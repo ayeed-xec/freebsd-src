@@ -2581,6 +2581,21 @@ sched_ule_fork_thread(struct thread *td, struct thread *child)
 #ifdef KTR
 	bzero(ts2->ts_name, sizeof(ts2->ts_name));
 #endif
+	/*
+	 * With SCHED_RESET_ON_FORK the child gets the time sharing class
+	 * and a nice value that is not negative.
+	 */
+	if ((td->td_flags & TDF_RESETFORK) != 0) {
+		if (PRI_IS_REALTIME(child->td_pri_class))
+			child->td_pri_class = PRI_TIMESHARE;
+		if (child->td_nice < 0)
+			child->td_nice = 0;
+		if (child->td_pri_class == PRI_TIMESHARE) {
+			sched_priority(child);
+			child->td_base_pri = child->td_user_pri;
+			child->td_priority = child->td_base_pri;
+		}
+	}
 }
 
 /*

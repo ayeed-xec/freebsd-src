@@ -350,6 +350,12 @@ void sched_instance_select(void);
 #define SCHED_OTHER     2
 #define SCHED_RR        3
 
+/*
+ * Flag ORed with a policy: threads and processes that the thread creates
+ * do not inherit a realtime policy or a negative nice value.
+ */
+#define	SCHED_RESET_ON_FORK	0x40000000
+
 struct sched_param {
         int     sched_priority;
 };

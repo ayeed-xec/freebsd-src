@@ -44,6 +44,7 @@ TEST_METADATA.ptrace_test+=		timeout="15"
 ATF_TESTS_C+=	reaper
 ATF_TESTS_C+=	resolve_beneath_test
 ATF_TESTS_C+=	sched_affinity
+ATF_TESTS_C+=	sched_tid_test
 ATF_TESTS_C+=	shutdown_dgram
 ATF_TESTS_C+=	sigaltstack
 ATF_TESTS_C+=	sigwait
@@ -119,6 +120,7 @@ LIBADD.ktls_test+=			crypto util
 LIBADD.listener_wakeup+=		pthread
 LIBADD.prio_thread_test+=		pthread
 LIBADD.procdesc+=			pthread
+LIBADD.sched_tid_test+=			pthread
 LIBADD.shutdown_dgram+=			pthread
 LIBADD.socket_msg_waitall+=		pthread
 LIBADD.socket_splice+=			pthread

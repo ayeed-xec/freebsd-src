@@ -819,6 +819,21 @@ sched_4bsd_fork_thread(struct thread *td, struct thread *childtd)
 	ts->ts_estcpu = tsc->ts_estcpu;
 	ts->ts_flags |= (tsc->ts_flags & TSF_AFFINITY);
 	ts->ts_slice = 1;
+	/*
+	 * With SCHED_RESET_ON_FORK the child gets the time sharing class
+	 * and a nice value that is not negative.
+	 */
+	if ((td->td_flags & TDF_RESETFORK) != 0) {
+		if (PRI_IS_REALTIME(childtd->td_pri_class))
+			childtd->td_pri_class = PRI_TIMESHARE;
+		if (childtd->td_nice < 0)
+			childtd->td_nice = 0;
+		if (childtd->td_pri_class == PRI_TIMESHARE) {
+			resetpriority(childtd);
+			childtd->td_base_pri = childtd->td_user_pri;
+			childtd->td_priority = childtd->td_base_pri;
+		}
+	}
 }
 
 static void

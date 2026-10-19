@@ -528,6 +528,9 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 */
 	thread_lock(td);
 	sched_fork(td, td2);
+	/* With SCHED_RESET_ON_FORK the child gets no negative nice value. */
+	if ((td->td_flags & TDF_RESETFORK) != 0 && p2->p_nice < 0)
+		p2->p_nice = 0;
 	/*
 	 * Request AST to check for TDP_RFPPWAIT.  Do it here
 	 * to avoid calling thread_lock() again.
