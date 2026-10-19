@@ -251,6 +251,8 @@ int	kern_mmap_racct_check(struct thread *td, struct vm_map *map,
 int	kern_mmap_maxprot(struct proc *p, int prot);
 int	kern_mprotect(struct thread *td, uintptr_t addr, size_t size,
 	    int prot, int flags);
+int	kern_mremap(struct thread *td, uintptr_t old_addr, size_t old_size,
+	    size_t new_size, int flags, uintptr_t new_addr);
 int	kern_msgctl(struct thread *, int, int, struct msqid_ds *);
 int	kern_msgrcv(struct thread *, int, void *, size_t, long, int, long *);
 int	kern_msgsnd(struct thread *, int, const void *, size_t, int, long);

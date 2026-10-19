@@ -3571,6 +3571,17 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 3;
 		break;
 	}
+	/* mremap */
+	case 606: {
+		struct mremap_args *p = params;
+		uarg[a++] = (intptr_t)p->old_address; /* void * */
+		uarg[a++] = p->old_size; /* size_t */
+		uarg[a++] = p->new_size; /* size_t */
+		iarg[a++] = p->flags; /* int */
+		uarg[a++] = (intptr_t)p->new_address; /* void * */
+		*n_args = 5;
+		break;
+	}
 	/* epoll_ctl */
 	case 610: {
 		struct epoll_ctl_args *p = params;
@@ -9584,6 +9595,28 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* mremap */
+	case 606:
+		switch (ndx) {
+		case 0:
+			p = "userland void *";
+			break;
+		case 1:
+			p = "size_t";
+			break;
+		case 2:
+			p = "size_t";
+			break;
+		case 3:
+			p = "int";
+			break;
+		case 4:
+			p = "userland void *";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* epoll_ctl */
 	case 610:
 		switch (ndx) {
@@ -11662,6 +11695,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 605:
 		if (ndx == 0 || ndx == 1)
 			p = "int";
+		break;
+	/* mremap */
+	case 606:
+		if (ndx == 0 || ndx == 1)
+			p = "void *";
 		break;
 	/* epoll_ctl */
 	case 610:

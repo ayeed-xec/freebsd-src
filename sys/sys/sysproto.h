@@ -1940,6 +1940,13 @@ struct thr_get_name_args {
 	char name_l_[PADL_(char *)]; char * name; char name_r_[PADR_(char *)];
 	char len_l_[PADL_(size_t)]; size_t len; char len_r_[PADR_(size_t)];
 };
+struct mremap_args {
+	char old_address_l_[PADL_(void *)]; void * old_address; char old_address_r_[PADR_(void *)];
+	char old_size_l_[PADL_(size_t)]; size_t old_size; char old_size_r_[PADR_(size_t)];
+	char new_size_l_[PADL_(size_t)]; size_t new_size; char new_size_r_[PADR_(size_t)];
+	char flags_l_[PADL_(int)]; int flags; char flags_r_[PADR_(int)];
+	char new_address_l_[PADL_(void *)]; void * new_address; char new_address_r_[PADR_(void *)];
+};
 struct epoll_ctl_args {
 	char epfd_l_[PADL_(int)]; int epfd; char epfd_r_[PADR_(int)];
 	char op_l_[PADL_(int)]; int op; char op_r_[PADR_(int)];
@@ -2365,6 +2372,7 @@ int	sys_renameat2(struct thread *, struct renameat2_args *);
 int	sys_syncfs(struct thread *, struct syncfs_args *);
 int	sys_thr_sigqueueinfo(struct thread *, struct thr_sigqueueinfo_args *);
 int	sys_thr_get_name(struct thread *, struct thr_get_name_args *);
+int	sys_mremap(struct thread *, struct mremap_args *);
 int	sys_epoll_ctl(struct thread *, struct epoll_ctl_args *);
 int	sys_epoll_pwait2(struct thread *, struct epoll_pwait2_args *);
 
@@ -3371,6 +3379,7 @@ int	freebsd14_setgroups(struct thread *, struct freebsd14_setgroups_args *);
 #define	SYS_AUE_syncfs	AUE_NULL
 #define	SYS_AUE_thr_sigqueueinfo	AUE_NULL
 #define	SYS_AUE_thr_get_name	AUE_NULL
+#define	SYS_AUE_mremap	AUE_NULL
 #define	SYS_AUE_epoll_ctl	AUE_NULL
 #define	SYS_AUE_epoll_pwait2	AUE_NULL
 

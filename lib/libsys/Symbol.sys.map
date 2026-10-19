@@ -393,6 +393,7 @@ FBSD_1.8 {
 FBSD_1.9 {
 	epoll_ctl;
 	epoll_pwait2;
+	mremap;
 	pdrfork;
 	pdrfork_thread;
 	renameat2;

@@ -67,6 +67,7 @@
 #include <sys/elf.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
@@ -2144,20 +2145,22 @@ vm_map_find(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 	return (rv);
 }
 
-int
-vm_map_find_locked(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
-    vm_offset_t *addr,	/* IN/OUT */
-    vm_size_t length, vm_offset_t max_addr, int find_space,
-    vm_prot_t prot, vm_prot_t max, int cow)
+/*
+ * Find free space of "length" bytes for a mapping of "object" at "offset",
+ * starting the search at "*addr".  "find_space" is not VMFS_NO_SPACE.
+ * On success, "*update_anonp" tells the caller to update the start of
+ * clustered anonymous mappings after it maps the space.
+ */
+static int
+vm_map_find_space(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
+    vm_offset_t *addr, vm_size_t length, vm_offset_t max_addr, int find_space,
+    vm_prot_t prot, int cow, bool *update_anonp)
 {
 	vm_offset_t alignment, curr_min_addr, min_addr;
 	int gap, pidx, rv, try;
 	bool cluster, en_aslr, update_anon;
 
-	KASSERT((cow & MAP_STACK_AREA) == 0 || object == NULL,
-	    ("non-NULL backing object for stack"));
-	MPASS((cow & MAP_REMAP) == 0 || (find_space == VMFS_NO_SPACE &&
-	    (cow & MAP_STACK_AREA) == 0));
+	VM_MAP_ASSERT_LOCKED(map);
 	if (find_space == VMFS_OPTIMAL_SPACE && (object == NULL ||
 	    (object->flags & OBJ_COLORED) == 0))
 		find_space = VMFS_ANY_SPACE;
@@ -2169,12 +2172,11 @@ vm_map_find_locked(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 	en_aslr = (map->flags & MAP_ASLR) != 0;
 	update_anon = cluster = clustering_anon_allowed(*addr, cow) &&
 	    (map->flags & MAP_IS_SUB_MAP) == 0 && max_addr == 0 &&
-	    find_space != VMFS_NO_SPACE && object == NULL &&
+	    object == NULL &&
 	    (cow & (MAP_INHERIT_SHARE | MAP_STACK_AREA)) == 0 &&
 	    prot != PROT_NONE;
 	curr_min_addr = min_addr = *addr;
 	if (en_aslr && min_addr == 0 && !cluster &&
-	    find_space != VMFS_NO_SPACE &&
 	    (map->flags & MAP_ASLR_IGNSTART) != 0)
 		curr_min_addr = min_addr = vm_map_min(map);
 	try = 0;
@@ -2183,101 +2185,123 @@ vm_map_find_locked(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
 		if (curr_min_addr == 0)
 			cluster = false;
 	}
-	if (find_space != VMFS_NO_SPACE) {
-		KASSERT(find_space == VMFS_ANY_SPACE ||
-		    find_space == VMFS_OPTIMAL_SPACE ||
-		    find_space == VMFS_SUPER_SPACE ||
-		    alignment != 0, ("unexpected VMFS flag"));
+	KASSERT(find_space == VMFS_ANY_SPACE ||
+	    find_space == VMFS_OPTIMAL_SPACE ||
+	    find_space == VMFS_SUPER_SPACE ||
+	    alignment != 0, ("unexpected VMFS flag"));
 again:
+	/*
+	 * When creating an anonymous mapping, try clustering
+	 * with an existing anonymous mapping first.
+	 *
+	 * We make up to two attempts to find address space
+	 * for a given find_space value. The first attempt may
+	 * apply randomization or may cluster with an existing
+	 * anonymous mapping. If this first attempt fails,
+	 * perform a first-fit search of the available address
+	 * space.
+	 *
+	 * If all tries failed, and find_space is
+	 * VMFS_OPTIMAL_SPACE, fallback to VMFS_ANY_SPACE.
+	 * Again enable clustering and randomization.
+	 */
+	try++;
+	MPASS(try <= 2);
+
+	if (try == 2) {
 		/*
-		 * When creating an anonymous mapping, try clustering
-		 * with an existing anonymous mapping first.
-		 *
-		 * We make up to two attempts to find address space
-		 * for a given find_space value. The first attempt may
-		 * apply randomization or may cluster with an existing
-		 * anonymous mapping. If this first attempt fails,
-		 * perform a first-fit search of the available address
-		 * space.
-		 *
-		 * If all tries failed, and find_space is
-		 * VMFS_OPTIMAL_SPACE, fallback to VMFS_ANY_SPACE.
-		 * Again enable clustering and randomization.
+		 * Second try: we failed either to find a
+		 * suitable region for randomizing the
+		 * allocation, or to cluster with an existing
+		 * mapping.  Retry with free run.
 		 */
-		try++;
-		MPASS(try <= 2);
+		curr_min_addr = (map->flags & MAP_ASLR_IGNSTART) != 0 ?
+		    vm_map_min(map) : min_addr;
+		atomic_add_long(&aslr_restarts, 1);
+	}
 
-		if (try == 2) {
-			/*
-			 * Second try: we failed either to find a
-			 * suitable region for randomizing the
-			 * allocation, or to cluster with an existing
-			 * mapping.  Retry with free run.
-			 */
-			curr_min_addr = (map->flags & MAP_ASLR_IGNSTART) != 0 ?
-			    vm_map_min(map) : min_addr;
-			atomic_add_long(&aslr_restarts, 1);
-		}
-
-		if (try == 1 && en_aslr && !cluster) {
-			/*
-			 * Find space for allocation, including
-			 * gap needed for later randomization.
-			 */
-			pidx = 0;
+	if (try == 1 && en_aslr && !cluster) {
+		/*
+		 * Find space for allocation, including
+		 * gap needed for later randomization.
+		 */
+		pidx = 0;
 #if VM_NRESERVLEVEL > 0
-			if ((find_space == VMFS_SUPER_SPACE ||
-			    find_space == VMFS_OPTIMAL_SPACE) &&
-			    pagesizes[VM_NRESERVLEVEL] != 0) {
-				/*
-				 * Do not pointlessly increase the space that
-				 * is requested from vm_map_findspace().
-				 * pmap_align_superpage() will only change a
-				 * mapping's alignment if that mapping is at
-				 * least a superpage in size.
-				 */
-				pidx = VM_NRESERVLEVEL;
-				while (pidx > 0 && length < pagesizes[pidx])
-					pidx--;
-			}
+		if ((find_space == VMFS_SUPER_SPACE ||
+		    find_space == VMFS_OPTIMAL_SPACE) &&
+		    pagesizes[VM_NRESERVLEVEL] != 0) {
+			/*
+			 * Do not pointlessly increase the space that
+			 * is requested from vm_map_findspace().
+			 * pmap_align_superpage() will only change a
+			 * mapping's alignment if that mapping is at
+			 * least a superpage in size.
+			 */
+			pidx = VM_NRESERVLEVEL;
+			while (pidx > 0 && length < pagesizes[pidx])
+				pidx--;
+		}
 #endif
-			gap = vm_map_max(map) > MAP_32BIT_MAX_ADDR &&
-			    (max_addr == 0 || max_addr > MAP_32BIT_MAX_ADDR) ?
-			    aslr_pages_rnd_64[pidx] : aslr_pages_rnd_32[pidx];
-			*addr = vm_map_findspace(map, curr_min_addr,
-			    length + gap * pagesizes[pidx]);
-			if (*addr + length + gap * pagesizes[pidx] >
-			    vm_map_max(map))
+		gap = vm_map_max(map) > MAP_32BIT_MAX_ADDR &&
+		    (max_addr == 0 || max_addr > MAP_32BIT_MAX_ADDR) ?
+		    aslr_pages_rnd_64[pidx] : aslr_pages_rnd_32[pidx];
+		*addr = vm_map_findspace(map, curr_min_addr,
+		    length + gap * pagesizes[pidx]);
+		if (*addr + length + gap * pagesizes[pidx] >
+		    vm_map_max(map))
+			goto again;
+		/* And randomize the start address. */
+		*addr += (arc4random() % gap) * pagesizes[pidx];
+		if (max_addr != 0 && *addr + length > max_addr)
+			goto again;
+	} else {
+		*addr = vm_map_findspace(map, curr_min_addr, length);
+		if (*addr + length > vm_map_max(map) ||
+		    (max_addr != 0 && *addr + length > max_addr)) {
+			if (cluster) {
+				cluster = false;
+				MPASS(try == 1);
 				goto again;
-			/* And randomize the start address. */
-			*addr += (arc4random() % gap) * pagesizes[pidx];
-			if (max_addr != 0 && *addr + length > max_addr)
-				goto again;
-		} else {
-			*addr = vm_map_findspace(map, curr_min_addr, length);
-			if (*addr + length > vm_map_max(map) ||
-			    (max_addr != 0 && *addr + length > max_addr)) {
-				if (cluster) {
-					cluster = false;
-					MPASS(try == 1);
-					goto again;
-				}
-				return (KERN_NO_SPACE);
 			}
+			return (KERN_NO_SPACE);
 		}
+	}
 
-		if (find_space != VMFS_ANY_SPACE &&
-		    (rv = vm_map_alignspace(map, object, offset, addr, length,
-		    max_addr, alignment)) != KERN_SUCCESS) {
-			if (find_space == VMFS_OPTIMAL_SPACE) {
-				find_space = VMFS_ANY_SPACE;
-				curr_min_addr = min_addr;
-				cluster = update_anon;
-				try = 0;
-				goto again;
-			}
-			return (rv);
+	if (find_space != VMFS_ANY_SPACE &&
+	    (rv = vm_map_alignspace(map, object, offset, addr, length,
+	    max_addr, alignment)) != KERN_SUCCESS) {
+		if (find_space == VMFS_OPTIMAL_SPACE) {
+			find_space = VMFS_ANY_SPACE;
+			curr_min_addr = min_addr;
+			cluster = update_anon;
+			try = 0;
+			goto again;
 		}
+		return (rv);
+	}
+	*update_anonp = update_anon;
+	return (KERN_SUCCESS);
+}
+
+int
+vm_map_find_locked(vm_map_t map, vm_object_t object, vm_ooffset_t offset,
+    vm_offset_t *addr,	/* IN/OUT */
+    vm_size_t length, vm_offset_t max_addr, int find_space,
+    vm_prot_t prot, vm_prot_t max, int cow)
+{
+	int rv;
+	bool update_anon;
+
+	KASSERT((cow & MAP_STACK_AREA) == 0 || object == NULL,
+	    ("non-NULL backing object for stack"));
+	MPASS((cow & MAP_REMAP) == 0 || (find_space == VMFS_NO_SPACE &&
+	    (cow & MAP_STACK_AREA) == 0));
+	update_anon = false;
+	if (find_space != VMFS_NO_SPACE) {
+		rv = vm_map_find_space(map, object, offset, addr, length,
+		    max_addr, find_space, prot, cow, &update_anon);
+		if (rv != KERN_SUCCESS)
+			return (rv);
 	} else if ((cow & MAP_REMAP) != 0) {
 		if (!vm_map_range_valid(map, *addr, *addr + length))
 			return (KERN_INVALID_ADDRESS);
@@ -4119,6 +4143,735 @@ vm_map_remove(vm_map_t map, vm_offset_t start, vm_offset_t end)
 	result = vm_map_delete(map, start, end);
 	vm_map_unlock(map);
 	return (result);
+}
+
+/*
+ * The entry flags that all entries of one mremap(2) range have in common.
+ * MAP_ENTRY_COW is not one of them: anonymous memory that grew after
+ * fork(2) has a second entry without it.
+ */
+#define	MAP_ENTRY_MREMAP_MASK	(MAP_ENTRY_NOSYNC | MAP_ENTRY_USER_WIRED | \
+    MAP_ENTRY_BEHAV_MASK | MAP_ENTRY_NOCOREDUMP | MAP_ENTRY_WRITECNT | \
+    MAP_ENTRY_SPLIT_BOUNDARY_MASK)
+
+/*
+ * The entries that mremap(2) does not move or resize.  Executable entries
+ * are refused by their protection.
+ */
+#define	MAP_ENTRY_MREMAP_NONE	(MAP_ENTRY_IS_SUB_MAP | MAP_ENTRY_NOFAULT | \
+    MAP_ENTRY_VN_EXEC | MAP_ENTRY_GROWS_DOWN | MAP_ENTRY_GUARD | \
+    MAP_ENTRY_STACK_GAP)
+
+static bool
+vm_map_entry_anon(vm_map_entry_t entry)
+{
+	vm_object_t object;
+
+	object = entry->object.vm_object;
+	return (object == NULL || (object->flags & OBJ_ANON) != 0);
+}
+
+/*
+ * A shared entry: all mappings of its object see the same pages, and a
+ * child of fork(2) shares the entry.
+ */
+static bool
+vm_map_entry_shared(vm_map_entry_t entry)
+{
+	return (entry->inheritance == VM_INHERIT_SHARE &&
+	    (entry->eflags & MAP_ENTRY_COW) == 0);
+}
+
+/*
+ * Return true if the entry maps a file or a shared memory object, directly
+ * or through the shadow objects of a private mapping.
+ */
+static bool
+vm_map_entry_maps_file(vm_map_entry_t entry)
+{
+	vm_object_t backing, object;
+	bool file;
+
+	object = entry->object.vm_object;
+	if (object == NULL)
+		return (false);
+	VM_OBJECT_RLOCK(object);
+	while ((backing = object->backing_object) != NULL) {
+		VM_OBJECT_RLOCK(backing);
+		VM_OBJECT_RUNLOCK(object);
+		object = backing;
+	}
+	file = (object->flags & OBJ_ANON) == 0;
+	VM_OBJECT_RUNLOCK(object);
+	return (file);
+}
+
+/*
+ * Return true if a clip of the entry at "addr" does not cut a large page.
+ */
+static bool
+vm_map_mremap_aligned(vm_map_entry_t entry, vm_offset_t addr)
+{
+	u_int bidx;
+
+	bidx = MAP_ENTRY_SPLIT_BOUNDARY_INDEX(entry);
+	return (bidx == 0 || (addr & (pagesizes[bidx] - 1)) == 0);
+}
+
+/*
+ * Wait until the entry is not in transition and, as vm_map_delete() does,
+ * until it has no system wirings.  The map can change while it is
+ * unlocked, so a true return tells the caller to start again.
+ */
+static bool
+vm_map_mremap_wait(vm_map_t map, vm_map_entry_t entry)
+{
+	if ((entry->eflags & MAP_ENTRY_IN_TRANSITION) == 0 &&
+	    vm_map_entry_system_wired_count(entry) == 0)
+		return (false);
+	entry->eflags |= MAP_ENTRY_NEEDS_WAKEUP;
+	(void)vm_map_unlock_and_wait(map, 0);
+	vm_map_lock(map);
+	return (true);
+}
+
+/*
+ * Return true if "entry", which follows "prev", continues the mapping that
+ * starts with "first".
+ */
+static bool
+vm_map_mremap_same_kind(vm_map_entry_t first, vm_map_entry_t prev,
+    vm_map_entry_t entry)
+{
+	if (((first->eflags ^ entry->eflags) & MAP_ENTRY_MREMAP_MASK) != 0 ||
+	    first->protection != entry->protection ||
+	    first->max_protection != entry->max_protection ||
+	    first->inheritance != entry->inheritance ||
+	    first->wired_count != entry->wired_count)
+		return (false);
+	if (vm_map_entry_anon(first))
+		return (vm_map_entry_anon(entry));
+	return (((first->eflags ^ entry->eflags) & MAP_ENTRY_COW) == 0 &&
+	    entry->object.vm_object == prev->object.vm_object &&
+	    entry->offset == prev->offset + (prev->end - prev->start));
+}
+
+/*
+ * Check the old range [start, end) of mremap(2).  Entries of one kind must
+ * map all of it.  Return the first and the last entry of the range.
+ */
+static int
+vm_map_mremap_check(vm_map_t map, vm_offset_t start, vm_offset_t end,
+    int flags, vm_map_entry_t *firstp, vm_map_entry_t *lastp)
+{
+	vm_map_entry_t entry, first, prev;
+	vm_object_t object;
+
+	if (!vm_map_lookup_entry(map, start, &first))
+		return (EFAULT);
+	prev = NULL;
+	entry = first;
+	for (;;) {
+		if (prev != NULL && (entry == &map->header ||
+		    entry->start != prev->end))
+			return (EFAULT);
+		if (vm_map_mremap_wait(map, entry))
+			return (ERESTART);
+		if ((entry->eflags & MAP_ENTRY_MREMAP_NONE) != 0 ||
+		    (entry->protection & VM_PROT_EXECUTE) != 0)
+			return (EINVAL);
+		object = entry->object.vm_object;
+		if (object != NULL &&
+		    (object->flags & (OBJ_FICTITIOUS | OBJ_SYSVSHM)) != 0)
+			return (EINVAL);
+		if (prev != NULL &&
+		    !vm_map_mremap_same_kind(first, prev, entry))
+			return (EFAULT);
+		if ((flags & MREMAP_DONTUNMAP) != 0 &&
+		    !vm_map_entry_shared(entry) &&
+		    vm_map_entry_maps_file(entry))
+			return (EINVAL);
+		if (entry->end >= end)
+			break;
+		prev = entry;
+		entry = vm_map_entry_succ(entry);
+	}
+	*firstp = first;
+	*lastp = entry;
+	return (0);
+}
+
+/*
+ * Check the range [start, end) of MREMAP_FIXED.  The vm_map_delete() of the
+ * range must not wait and must not fail.
+ */
+static int
+vm_map_mremap_check_target(vm_map_t map, vm_offset_t start, vm_offset_t end)
+{
+	vm_map_entry_t entry;
+
+	if (!vm_map_lookup_entry(map, start, &entry))
+		entry = vm_map_entry_succ(entry);
+	else if (!vm_map_mremap_aligned(entry, start))
+		return (EINVAL);
+	for (; entry->start < end; entry = vm_map_entry_succ(entry)) {
+		if (vm_map_mremap_wait(map, entry))
+			return (ERESTART);
+		if (entry->end > end && !vm_map_mremap_aligned(entry, end))
+			return (EINVAL);
+	}
+	return (0);
+}
+
+/*
+ * Check the resource limits for "added" more bytes of mappings, of which
+ * "wired" bytes will be wired.
+ */
+static int
+vm_map_mremap_limits(vm_map_t map, vm_size_t added, vm_size_t wired)
+{
+	struct proc *p;
+
+	p = curproc;
+	if (added > lim_cur(curthread, RLIMIT_VMEM) ||
+	    map->size > lim_cur(curthread, RLIMIT_VMEM) - added)
+		return (ENOMEM);
+	if (wired != 0 && (ptoa(pmap_wired_count(map->pmap)) + wired >
+	    lim_cur(curthread, RLIMIT_MEMLOCK) ||
+	    atop(wired) + vm_user_wire_count > vm_page_max_user_wired))
+		return (EAGAIN);
+#ifdef RACCT
+	if (racct_enable) {
+		PROC_LOCK(p);
+		if (added != 0 && racct_set(p, RACCT_VMEM, map->size + added)) {
+			PROC_UNLOCK(p);
+			return (ENOMEM);
+		}
+		if (wired != 0 && racct_set(p, RACCT_MEMLOCK,
+		    ptoa(pmap_wired_count(map->pmap)) + wired)) {
+			PROC_UNLOCK(p);
+			return (EAGAIN);
+		}
+		PROC_UNLOCK(p);
+	}
+#endif
+	return (0);
+}
+
+/*
+ * Map [start, end) with the protection, inheritance and flags of "tmpl":
+ * "object" at "offset", or anonymous memory if "object" is NULL.  The
+ * caller holds a reference on "object" for the new entry.
+ */
+static int
+vm_map_mremap_insert(vm_map_t map, vm_map_entry_t tmpl, vm_object_t object,
+    vm_ooffset_t offset, vm_offset_t start, vm_offset_t end)
+{
+	vm_map_entry_t entry;
+	int cow, rv;
+
+	cow = MAP_ENTRY_SPLIT_BOUNDARY_INDEX(tmpl) << MAP_SPLIT_BOUNDARY_SHIFT;
+	if ((tmpl->eflags & MAP_ENTRY_NOSYNC) != 0)
+		cow |= MAP_DISABLE_SYNCER;
+	if ((tmpl->eflags & MAP_ENTRY_NOCOREDUMP) != 0)
+		cow |= MAP_DISABLE_COREDUMP;
+	if (tmpl->inheritance == VM_INHERIT_SHARE)
+		cow |= MAP_INHERIT_SHARE;
+	if (object != NULL && (tmpl->eflags & MAP_ENTRY_COW) != 0)
+		cow |= MAP_COPY_ON_WRITE;
+	if (object != NULL && (tmpl->eflags & MAP_ENTRY_WRITECNT) != 0)
+		cow |= MAP_WRITECOUNT;
+	rv = vm_map_insert1(map, object, offset, start, end, tmpl->protection,
+	    tmpl->max_protection, cow, &entry);
+	if (rv != KERN_SUCCESS)
+		return (rv);
+	if ((cow & MAP_WRITECOUNT) != 0)
+		vm_pager_update_writecount(object, start, end);
+
+	/*
+	 * vm_map_insert() gives only the inheritance of MAP_INHERIT_SHARE
+	 * and the default behavior.  Set the others on the new range alone,
+	 * because "entry" can include a neighbor that it was merged with.
+	 */
+	if (entry->inheritance != tmpl->inheritance ||
+	    vm_map_entry_behavior(entry) != vm_map_entry_behavior(tmpl)) {
+		(void)vm_map_clip_start(map, entry, start);
+		(void)vm_map_clip_end(map, entry, end);
+		entry->inheritance = tmpl->inheritance;
+		vm_map_entry_set_behavior(entry, vm_map_entry_behavior(tmpl));
+		vm_map_try_merge_entries(map, vm_map_entry_pred(entry), entry);
+		vm_map_try_merge_entries(map, entry, vm_map_entry_succ(entry));
+	}
+	return (KERN_SUCCESS);
+}
+
+/*
+ * Map new anonymous memory at [start, end) with the protection, inheritance
+ * and flags of "tmpl".  The caller has reserved the swap space of a
+ * writable range, so this cannot fail after the move of MREMAP_DONTUNMAP.
+ */
+static void
+vm_map_mremap_zero(vm_map_t map, vm_map_entry_t tmpl, vm_offset_t start,
+    vm_offset_t end)
+{
+	vm_map_entry_t entry;
+
+	entry = vm_map_entry_create(map);
+	entry->start = start;
+	entry->end = end;
+	entry->next_read = start;
+	entry->object.vm_object = NULL;
+	entry->offset = 0;
+	entry->eflags = tmpl->eflags & (MAP_ENTRY_NOSYNC |
+	    MAP_ENTRY_BEHAV_MASK | MAP_ENTRY_NOCOREDUMP);
+	entry->protection = tmpl->protection;
+	entry->max_protection = tmpl->max_protection;
+	entry->inheritance = tmpl->inheritance;
+	entry->read_ahead = VM_FAULT_READ_AHEAD_INIT;
+	entry->wired_count = 0;
+	entry->cred = (tmpl->protection & VM_PROT_WRITE) != 0 ?
+	    crhold(curthread->td_ucred) : NULL;
+	entry->wiring_thread = NULL;
+	vm_map_entry_link(map, entry);
+	map->size += end - start;
+}
+
+/*
+ * Move the entries of [first->start, end) to "new_start", where the map
+ * must be free.  The entries keep their protections, inheritance and
+ * wiring, and their pages, so no data is copied.  The pmap forgets the old
+ * range, and faults fill the new one.  An entry is unlinked and linked
+ * again, not deleted and made again: a delete would free the pages of an
+ * object with OBJ_ONEMAPPING.
+ *
+ * The code for OBJ_ONEMAPPING, for example vm_object_coalesce(), expects
+ * that all entries of such an object map it at one distance between
+ * address and offset.  An entry that moves away from other references to
+ * its object gets its own object, as in vmspace_fork().
+ */
+static void
+vm_map_mremap_move(vm_map_t map, vm_map_entry_t first, vm_offset_t end,
+    vm_offset_t new_start)
+{
+	vm_map_entry_t entry, next;
+	vm_object_t object;
+	vm_offset_t start;
+
+	VM_MAP_ASSERT_LOCKED(map);
+	start = first->start;
+	pmap_map_delete(map->pmap, start, end);
+	for (entry = first; entry->start < end; entry = next) {
+		next = vm_map_entry_succ(entry);
+		object = entry->object.vm_object;
+		if (object != NULL && (object->flags & OBJ_ANON) != 0) {
+			VM_OBJECT_WLOCK(object);
+			if ((object->flags & OBJ_ONEMAPPING) != 0 &&
+			    object->ref_count > 1) {
+				vm_object_split(entry);
+				object = entry->object.vm_object;
+			}
+			VM_OBJECT_WUNLOCK(object);
+		}
+		vm_map_entry_unlink(map, entry, UNLINK_MERGE_NONE);
+		entry->next_read = entry->next_read - start + new_start;
+		entry->start = entry->start - start + new_start;
+		entry->end = entry->end - start + new_start;
+		vm_map_entry_link(map, entry);
+	}
+}
+
+/*
+ * The move removed the wired mappings of the old range from the pmap, but
+ * the pages stay wired in their objects.  Fault in the pages of the wired
+ * entries of [start, end) again: a fault on a wired entry enters a wired
+ * mapping and does not wire the page a second time.  The wired count of
+ * the pmap, which RLIMIT_MEMLOCK uses, is then as before the move.
+ */
+static void
+vm_map_mremap_rewire(vm_map_t map, vm_offset_t start, vm_offset_t end,
+    vm_size_t incr)
+{
+	vm_map_entry_t entry, prev;
+	vm_offset_t va;
+	bool need_wakeup;
+
+	VM_MAP_ASSERT_LOCKED(map);
+	if (!vm_map_lookup_entry(map, start, &entry))
+		panic("%s: map %p has no entry at %#jx", __func__, map,
+		    (uintmax_t)start);
+	for (; entry->start < end; entry = vm_map_entry_succ(entry)) {
+		KASSERT(entry->wired_count != 0 &&
+		    (entry->eflags & MAP_ENTRY_IN_TRANSITION) == 0,
+		    ("%s: entry %p is not wired or is in transition", __func__,
+		    entry));
+		entry->eflags |= MAP_ENTRY_IN_TRANSITION;
+		entry->wiring_thread = curthread;
+	}
+	vm_map_busy(map);
+	vm_map_unlock(map);
+	for (va = start; va < end; va += incr)
+		(void)vm_fault(map, va, VM_PROT_NONE, VM_FAULT_NORMAL, NULL);
+	vm_map_lock(map);
+	vm_map_unbusy(map);
+
+	/*
+	 * Entries in transition can be clipped while the map is unlocked,
+	 * but they are not merged or deleted.
+	 */
+	need_wakeup = false;
+	if (!vm_map_lookup_entry(map, start, &entry))
+		panic("%s: map %p has no entry at %#jx", __func__, map,
+		    (uintmax_t)start);
+	for (prev = vm_map_entry_pred(entry); entry->start < end;
+	    prev = entry, entry = vm_map_entry_succ(entry)) {
+		KASSERT((entry->eflags & MAP_ENTRY_IN_TRANSITION) != 0 &&
+		    entry->wiring_thread == curthread,
+		    ("%s: entry %p is not ours", __func__, entry));
+		entry->eflags &= ~MAP_ENTRY_IN_TRANSITION;
+		entry->wiring_thread = NULL;
+		if ((entry->eflags & MAP_ENTRY_NEEDS_WAKEUP) != 0) {
+			entry->eflags &= ~MAP_ENTRY_NEEDS_WAKEUP;
+			need_wakeup = true;
+		}
+		vm_map_try_merge_entries(map, prev, entry);
+	}
+	vm_map_try_merge_entries(map, prev, entry);
+	if (need_wakeup)
+		vm_map_wakeup(map);
+}
+
+/*
+ * mremap(2) with an old size of 0: map "new_size" bytes of the object of a
+ * shared mapping a second time, from the offset of "old_start".
+ */
+static int
+vm_map_mremap_copy(vm_map_t map, vm_offset_t old_start, vm_size_t new_size,
+    int flags, vm_offset_t *addrp)
+{
+	struct vm_map_entry tmpl;
+	vm_map_entry_t entry;
+	vm_object_t object;
+	vm_ooffset_t offset;
+	vm_offset_t addr, mask;
+	u_int bidx;
+	int error, find_space, rv;
+	bool update_anon;
+
+	error = vm_map_mremap_check(map, old_start, old_start + PAGE_SIZE,
+	    flags, &entry, &entry);
+	if (error != 0)
+		return (error);
+	if (!vm_map_entry_shared(entry))
+		return (EINVAL);
+	bidx = MAP_ENTRY_SPLIT_BOUNDARY_INDEX(entry);
+	mask = pagesizes[bidx] - 1;
+	addr = *addrp;
+	if (((old_start | new_size) & mask) != 0 ||
+	    ((flags & MREMAP_FIXED) != 0 && (addr & mask) != 0))
+		return (EINVAL);
+	offset = entry->offset + (old_start - entry->start);
+	if (offset > OFF_MAX || new_size > OFF_MAX - offset)
+		return (EINVAL);
+	if ((flags & MREMAP_FIXED) != 0) {
+		error = vm_map_mremap_check_target(map, addr, addr + new_size);
+		if (error != 0)
+			return (error);
+	}
+	error = vm_map_mremap_limits(map, new_size, 0);
+	if (error != 0)
+		return (error);
+
+	/*
+	 * Shared anonymous memory gets its object at the first fault.  Make
+	 * it now, so that both mappings use it.
+	 */
+	vm_map_entry_charge_object(map, entry);
+	object = entry->object.vm_object;
+	if ((flags & MREMAP_FIXED) == 0) {
+		find_space = bidx != 0 ?
+		    VMFS_ALIGNED_SPACE(flsl(pagesizes[bidx]) - 1) :
+		    VMFS_OPTIMAL_SPACE;
+		rv = vm_map_find_space(map, object, offset, &addr, new_size, 0,
+		    find_space, entry->protection,
+		    MAP_INHERIT_SHARE | MAP_NO_HINT, &update_anon);
+		if (rv != KERN_SUCCESS)
+			return (ENOMEM);
+	}
+
+	/*
+	 * The delete of the target range can remove the old entry, so keep
+	 * a copy of it and a reference on its object.  The object gets a
+	 * second mapping: clear OBJ_ONEMAPPING first, so that the delete
+	 * does not free pages that the new mapping uses.
+	 */
+	tmpl = *entry;
+	vm_object_reference(object);
+	if ((object->flags & OBJ_ANON) != 0) {
+		VM_OBJECT_WLOCK(object);
+		vm_object_clear_flag(object, OBJ_ONEMAPPING);
+		VM_OBJECT_WUNLOCK(object);
+	}
+	if ((flags & MREMAP_FIXED) != 0)
+		(void)vm_map_delete(map, addr, addr + new_size);
+	rv = vm_map_mremap_insert(map, &tmpl, object, offset, addr,
+	    addr + new_size);
+	KASSERT(rv == KERN_SUCCESS, ("%s: insert failed %d", __func__, rv));
+	*addrp = addr;
+	return (0);
+}
+
+/*
+ * mremap(2) of the range [old_start, old_start + old_size): shrink it, grow
+ * it in place, or move it.
+ */
+static int
+vm_map_mremap_range(vm_map_t map, vm_offset_t old_start, vm_size_t old_size,
+    vm_size_t new_size, int flags, vm_offset_t *addrp)
+{
+	struct vm_map_entry tmpl;
+	vm_map_entry_t entry, first, last;
+	vm_object_t object;
+	vm_ooffset_t offset;
+	vm_offset_t addr, mask, new_end, old_end, run_end, start;
+	vm_size_t added, charge, grow, run_size;
+	u_int bidx;
+	int cow, error, find_space, rv;
+	bool move, update_anon, wired;
+
+	old_end = old_start + old_size;
+	error = vm_map_mremap_check(map, old_start, old_end, flags, &first,
+	    &last);
+	if (error != 0)
+		return (error);
+	bidx = MAP_ENTRY_SPLIT_BOUNDARY_INDEX(first);
+	mask = pagesizes[bidx] - 1;
+	addr = *addrp;
+	if (((old_start | old_size | new_size) & mask) != 0 ||
+	    ((flags & MREMAP_FIXED) != 0 && (addr & mask) != 0))
+		return (EINVAL);
+	wired = first->wired_count != 0;
+	grow = new_size > old_size ? new_size - old_size : 0;
+	run_size = MIN(old_size, new_size);
+	run_end = old_start + run_size;
+
+	/*
+	 * The new tail continues the last entry: anonymous memory, or the
+	 * object of a file or shared memory at the next offset.  The tail of
+	 * a private file mapping after a write would need the file object
+	 * from below the shadow objects.
+	 */
+	object = NULL;
+	offset = 0;
+	if (grow != 0) {
+		if (vm_map_entry_anon(last)) {
+			if (!vm_map_entry_shared(last) &&
+			    vm_map_entry_maps_file(last))
+				return (EINVAL);
+		} else {
+			object = last->object.vm_object;
+			offset = last->offset + (old_end - last->start);
+			if (offset > OFF_MAX || grow > OFF_MAX - offset)
+				return (EINVAL);
+		}
+	}
+
+	if ((flags & (MREMAP_FIXED | MREMAP_DONTUNMAP)) != 0)
+		move = true;
+	else if (grow == 0)
+		move = false;
+	else {
+		move = last->end != old_end ||
+		    new_size > vm_map_max(map) - old_start ||
+		    vm_map_entry_succ(last)->start < old_start + new_size;
+		if (move && (flags & MREMAP_MAYMOVE) == 0)
+			return (ENOMEM);
+	}
+	update_anon = false;
+	if (move && (flags & MREMAP_FIXED) != 0) {
+		error = vm_map_mremap_check_target(map, addr, addr + new_size);
+		if (error != 0)
+			return (error);
+	} else if (move) {
+		find_space = bidx != 0 ?
+		    VMFS_ALIGNED_SPACE(flsl(pagesizes[bidx]) - 1) :
+		    VMFS_OPTIMAL_SPACE;
+		cow = MAP_NO_HINT;
+		if (first->inheritance == VM_INHERIT_SHARE)
+			cow |= MAP_INHERIT_SHARE;
+		rv = vm_map_find_space(map, first->object.vm_object,
+		    first->offset + (old_start - first->start), &addr, new_size,
+		    0, find_space, first->protection, cow, &update_anon);
+		if (rv != KERN_SUCCESS)
+			return (ENOMEM);
+	}
+
+	/*
+	 * MREMAP_DONTUNMAP maps the old range again: the same object for
+	 * shared memory, and new memory with a swap charge for private
+	 * memory.
+	 */
+	added = grow;
+	charge = 0;
+	if ((flags & MREMAP_DONTUNMAP) != 0) {
+		added += old_size;
+		for (entry = first; entry->start < old_end;
+		    entry = vm_map_entry_succ(entry)) {
+			if (!vm_map_entry_shared(entry) &&
+			    (entry->protection & VM_PROT_WRITE) != 0)
+				charge += MIN(entry->end, old_end) -
+				    MAX(entry->start, old_start);
+		}
+	}
+	error = vm_map_mremap_limits(map, added, wired ? grow : 0);
+	if (error != 0)
+		return (error);
+	if (charge != 0 && !swap_reserve(charge))
+		return (ENOMEM);
+
+	if (!move) {
+		if (grow != 0) {
+			/*
+			 * vm_map_insert() can merge "last" into the new
+			 * entry and free it.
+			 */
+			tmpl = *last;
+			if (object != NULL)
+				vm_object_reference(object);
+			rv = vm_map_mremap_insert(map, &tmpl, object, offset,
+			    old_end, old_start + new_size);
+			if (rv != KERN_SUCCESS) {
+				if (object != NULL)
+					vm_object_deallocate(object);
+				return (ENOMEM);
+			}
+		} else if (new_size < old_size)
+			(void)vm_map_delete(map, run_end, old_end);
+		if (wired && grow != 0)
+			(void)vm_map_wire_locked(map, old_end,
+			    old_start + new_size,
+			    VM_MAP_WIRE_USER | VM_MAP_WIRE_NOHOLES);
+		*addrp = old_start;
+		return (0);
+	}
+
+	/*
+	 * Cut the entries at the ends of the range that moves, so that the
+	 * deletes below do not touch it.  The checks above make each cut
+	 * and each delete succeed without a wait.
+	 */
+	if ((flags & MREMAP_DONTUNMAP) != 0) {
+		for (entry = first; entry->start < old_end;
+		    entry = vm_map_entry_succ(entry)) {
+			if (vm_map_entry_shared(entry))
+				vm_map_entry_charge_object(map, entry);
+		}
+	}
+	(void)vm_map_clip_start(map, first, old_start);
+	if (!vm_map_lookup_entry(map, run_end - 1, &last))
+		panic("%s: map %p has no entry at %#jx", __func__, map,
+		    (uintmax_t)(run_end - 1));
+	(void)vm_map_clip_end(map, last, run_end);
+	tmpl = *last;
+	new_end = addr + new_size;
+	if ((flags & MREMAP_FIXED) != 0)
+		(void)vm_map_delete(map, addr, new_end);
+	if (run_end < old_end)
+		(void)vm_map_delete(map, run_end, old_end);
+
+	/*
+	 * Map the new tail before the move.  If that fails, only a target
+	 * range of MREMAP_FIXED is gone, as for mmap(2) with MAP_FIXED.
+	 */
+	if (grow != 0) {
+		if (object != NULL)
+			vm_object_reference(object);
+		rv = vm_map_mremap_insert(map, &tmpl, object, offset,
+		    addr + old_size, new_end);
+		if (rv != KERN_SUCCESS) {
+			if (object != NULL)
+				vm_object_deallocate(object);
+			return (ENOMEM);
+		}
+
+		/*
+		 * A tail that ends at "old_start" can be merged into the
+		 * first entry.  Cut the entry there again.
+		 */
+		(void)vm_map_clip_start(map, first, old_start);
+	}
+	vm_map_mremap_move(map, first, run_end, addr);
+	if (update_anon && (map->anon_loc == 0 || addr < map->anon_loc))
+		map->anon_loc = addr;
+
+	if ((flags & MREMAP_DONTUNMAP) != 0) {
+		if (!vm_map_lookup_entry(map, addr, &entry))
+			panic("%s: map %p has no entry at %#jx", __func__, map,
+			    (uintmax_t)addr);
+		for (; entry->start < addr + old_size;
+		    entry = vm_map_entry_succ(entry)) {
+			tmpl = *entry;
+			start = entry->start - addr + old_start;
+			if (vm_map_entry_shared(entry)) {
+				vm_object_reference(entry->object.vm_object);
+				rv = vm_map_mremap_insert(map, &tmpl,
+				    entry->object.vm_object, entry->offset,
+				    start, start + (entry->end - entry->start));
+				KASSERT(rv == KERN_SUCCESS,
+				    ("%s: insert failed %d", __func__, rv));
+			} else {
+				vm_map_mremap_zero(map, &tmpl, start,
+				    start + (entry->end - entry->start));
+			}
+		}
+	}
+
+	if (wired)
+		vm_map_mremap_rewire(map, addr, addr + run_size,
+		    pagesizes[bidx]);
+	if (wired && grow != 0)
+		(void)vm_map_wire_locked(map, addr + old_size, new_end,
+		    VM_MAP_WIRE_USER | VM_MAP_WIRE_NOHOLES);
+	*addrp = addr;
+	return (0);
+}
+
+/*
+ * Implement mremap(2).  The sizes are multiples of the page size.  On input
+ * "*addrp" is the address of MREMAP_FIXED or the start of the search for a
+ * move; on output it is the address of the mapping.
+ */
+int
+vm_map_mremap(vm_map_t map, vm_offset_t old_start, vm_size_t old_size,
+    vm_size_t new_size, int flags, vm_offset_t *addrp)
+{
+	vm_offset_t addr;
+	int error;
+
+	MPASS(!vm_map_is_system(map));
+	vm_map_lock(map);
+	do {
+		addr = *addrp;
+		if (old_size == 0)
+			error = vm_map_mremap_copy(map, old_start, new_size,
+			    flags, &addr);
+		else
+			error = vm_map_mremap_range(map, old_start, old_size,
+			    new_size, flags, &addr);
+	} while (error == ERESTART);
+#ifdef RACCT
+	if (racct_enable) {
+		PROC_LOCK(curproc);
+		if (error != 0)
+			racct_set_force(curproc, RACCT_VMEM, map->size);
+		racct_set_force(curproc, RACCT_MEMLOCK,
+		    ptoa(pmap_wired_count(map->pmap)));
+		PROC_UNLOCK(curproc);
+	}
+#endif
+	vm_map_unlock(map);
+	if (error == 0)
+		*addrp = addr;
+	return (error);
 }
 
 /*

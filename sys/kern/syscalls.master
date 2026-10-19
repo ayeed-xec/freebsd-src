@@ -3442,7 +3442,16 @@
 		    size_t len
 		);
 	}
-606-609	AUE_NULL	RESERVED
+606	AUE_NULL	STD|CAPENABLED {
+		void *mremap(
+		    _In_ void *old_address,
+		    size_t old_size,
+		    size_t new_size,
+		    int flags,
+		    _In_opt_ void *new_address
+		);
+	}
+607-609	AUE_NULL	RESERVED
 610	AUE_NULL	STD|CAPENABLED {
 		int epoll_ctl(
 		    int epfd,

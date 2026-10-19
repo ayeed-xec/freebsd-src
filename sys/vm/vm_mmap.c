@@ -714,6 +714,79 @@ kern_munmap(struct thread *td, uintptr_t addr0, size_t size)
 }
 
 #ifndef _SYS_SYSPROTO_H_
+struct mremap_args {
+	void *old_address;
+	size_t old_size;
+	size_t new_size;
+	int flags;
+	void *new_address;
+};
+#endif
+int
+sys_mremap(struct thread *td, struct mremap_args *uap)
+{
+
+	return (kern_mremap(td, (uintptr_t)uap->old_address, uap->old_size,
+	    uap->new_size, uap->flags, (uintptr_t)uap->new_address));
+}
+
+int
+kern_mremap(struct thread *td, uintptr_t old_addr, size_t old_size,
+    size_t new_size, int flags, uintptr_t new_addr)
+{
+	struct vmspace *vms;
+	vm_offset_t addr;
+	vm_size_t new_len, old_len, old_span;
+	vm_map_t map;
+	int error;
+
+	if ((flags & ~(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP)) != 0)
+		return (EINVAL);
+	if ((flags & (MREMAP_FIXED | MREMAP_DONTUNMAP)) != 0 &&
+	    (flags & MREMAP_MAYMOVE) == 0)
+		return (EINVAL);
+	if ((old_addr & PAGE_MASK) != 0 || new_size == 0)
+		return (EINVAL);
+	new_len = round_page(new_size);
+	if (new_len < new_size)
+		return (ENOMEM);
+	old_len = round_page(old_size);
+	if (old_len < old_size)
+		return (EFAULT);
+	if ((flags & MREMAP_DONTUNMAP) != 0 && old_len != new_len)
+		return (EINVAL);
+	if (old_len == 0 && (flags & MREMAP_MAYMOVE) == 0)
+		return (EINVAL);
+
+	/*
+	 * An old size of 0 names the mapping at "old_addr"; its first page
+	 * is the old range for the checks.
+	 */
+	old_span = old_len != 0 ? old_len : PAGE_SIZE;
+	vms = td->td_proc->p_vmspace;
+	map = &vms->vm_map;
+	if (new_len > vm_map_max(map) - vm_map_min(map))
+		return (ENOMEM);
+	if (!vm_map_range_valid(map, old_addr, old_addr + old_span))
+		return (EFAULT);
+	if ((flags & MREMAP_FIXED) != 0) {
+		if ((new_addr & PAGE_MASK) != 0 ||
+		    !vm_map_range_valid(map, new_addr, new_addr + new_len) ||
+		    (new_addr < old_addr + old_span &&
+		    old_addr < new_addr + new_len))
+			return (EINVAL);
+		addr = new_addr;
+	} else {
+		addr = round_page((vm_offset_t)vms->vm_daddr +
+		    lim_max(td, RLIMIT_DATA));
+	}
+	error = vm_map_mremap(map, old_addr, old_len, new_len, flags, &addr);
+	if (error == 0)
+		td->td_retval[0] = addr;
+	return (error);
+}
+
+#ifndef _SYS_SYSPROTO_H_
 struct mprotect_args {
 	const void *addr;
 	size_t len;

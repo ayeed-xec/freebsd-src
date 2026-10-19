@@ -1,0 +1,243 @@
+.\"
+.\" Copyright (c) 2026 Ayeed Shaikh <Ayeed.AI10@race.reva.edu.in>
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.Dd October 19, 2026
+.Dt MREMAP 2
+.Os
+.Sh NAME
+.Nm mremap
+.Nd resize or move a memory mapping
+.Sh LIBRARY
+.Lb libc
+.Sh SYNOPSIS
+.In sys/mman.h
+.Ft "void *"
+.Fn mremap "void *old_address" "size_t old_size" "size_t new_size" "int flags" "..."
+.Sh DESCRIPTION
+The
+.Fn mremap
+system call changes the size or the address of the mapping of the range
+that starts at
+.Fa old_address
+and is
+.Fa old_size
+bytes long, or maps the pages of a shared mapping a second time.
+The
+.Fa old_address
+argument must be a multiple of the page size.
+The kernel rounds
+.Fa old_size
+and
+.Fa new_size
+up to a multiple of the page size.
+.Pp
+Without flags, a smaller
+.Fa new_size
+removes the end of the range as
+.Xr munmap 2
+does, and a larger
+.Fa new_size
+extends the mapping in place.
+If the addresses after the range are not free, the call fails.
+.Pp
+The range must be mapped completely, by one mapping or by adjacent
+mappings of one kind: the same protection, maximum protection,
+inheritance and wiring, and, for a file or a shared memory object,
+consecutive parts of the same object.
+The new part of a larger mapping continues the last mapping of the range:
+new anonymous memory for anonymous memory, and the next part of the file
+or the shared memory object for a mapping of one.
+A reference to a page past the end of the file or the object raises
+.Dv SIGBUS .
+If the range is wired with
+.Xr mlock 2 ,
+the kernel wires the new part too.
+.Pp
+The
+.Fa flags
+argument is 0 or the bitwise OR of these values:
+.Bl -tag -width MREMAP_DONTUNMAP
+.It Dv MREMAP_MAYMOVE
+If the mapping cannot grow in place, move it to an address that the kernel
+selects as for
+.Xr mmap 2 .
+.It Dv MREMAP_FIXED
+Move the mapping to the address in the fifth argument,
+.Fa "void *new_address" .
+This address must be a multiple of the page size, and the new range must
+not overlap the old range.
+Mappings in the new range are removed first, as for
+.Xr mmap 2
+with
+.Dv MAP_FIXED .
+This flag needs
+.Dv MREMAP_MAYMOVE .
+Without it, the kernel ignores the fifth argument.
+.It Dv MREMAP_DONTUNMAP
+Move the mapping, and map the old range again with the same protection:
+new anonymous memory, filled with zeros, in place of private anonymous
+memory, and the same pages in place of a shared mapping.
+This flag needs
+.Dv MREMAP_MAYMOVE ,
+and
+.Fa new_size
+must be equal to
+.Fa old_size .
+.El
+.Pp
+A move keeps the pages, the protection, the maximum protection, the
+inheritance and the wiring of the mapping.
+No data is copied.
+.Pp
+If
+.Fa old_size
+is 0 and
+.Fa old_address
+is in a shared mapping, the call makes a second mapping of
+.Fa new_size
+bytes of the same object, from the offset that
+.Fa old_address
+maps.
+The old mapping does not change.
+This needs
+.Dv MREMAP_MAYMOVE .
+.Pp
+The call does not change executable mappings, stacks that grow down and
+their guard pages, guards made with
+.Dv MAP_GUARD ,
+device mappings, or System V shared memory.
+.Sh RETURN VALUES
+Upon successful completion,
+.Fn mremap
+returns the address of the mapping.
+Otherwise the value
+.Dv MAP_FAILED
+is returned and
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+The
+.Fn mremap
+system call
+will fail if:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The
+.Fa flags
+argument has an unknown bit, or
+.Dv MREMAP_FIXED
+or
+.Dv MREMAP_DONTUNMAP
+without
+.Dv MREMAP_MAYMOVE .
+.It Bq Er EINVAL
+The
+.Fa old_address
+argument is not a multiple of the page size, or
+.Fa new_size
+is 0.
+.It Bq Er EINVAL
+With
+.Dv MREMAP_FIXED ,
+.Fa new_address
+is not a multiple of the page size, the new range is outside the address
+space of the process, or it overlaps the old range.
+With an
+.Fa old_size
+of 0, the old range is the page at
+.Fa old_address .
+.It Bq Er EINVAL
+.Dv MREMAP_DONTUNMAP
+with a change of size or for a private file mapping.
+.It Bq Er EINVAL
+An
+.Fa old_size
+of 0 without
+.Dv MREMAP_MAYMOVE ,
+or for a mapping that is not shared.
+.It Bq Er EINVAL
+The range has a mapping that the call does not change, such as an
+executable mapping.
+.It Bq Er EINVAL
+For a mapping of large pages from
+.Xr shm_create_largepage 3 ,
+an address or a size is not a multiple of the large page size.
+.It Bq Er EINVAL
+A larger private file mapping after a write to it, or an offset in the
+object past
+.Dv OFF_MAX .
+.It Bq Er EFAULT
+The range is not mapped completely, or its mappings are of different
+kinds.
+.It Bq Er ENOMEM
+The mapping cannot grow in place and
+.Dv MREMAP_MAYMOVE
+is not set, or no address range is free for a move.
+.It Bq Er ENOMEM
+The new size is too large, or the call would exceed the
+.Dv RLIMIT_VMEM
+resource limit or the swap space limits.
+.It Bq Er EAGAIN
+The range is wired and the new part would exceed the
+.Dv RLIMIT_MEMLOCK
+resource limit or the system limit of wired pages.
+.El
+.Sh SEE ALSO
+.Xr madvise 2 ,
+.Xr minherit 2 ,
+.Xr mlock 2 ,
+.Xr mmap 2 ,
+.Xr mprotect 2 ,
+.Xr munmap 2 ,
+.Xr shm_open 2
+.Sh STANDARDS
+The
+.Fn mremap
+system call is a
+.Fx
+extension that is compatible with the Linux system call of the same name.
+The
+.Nx
+.Fn mremap
+has another order of arguments.
+.Sh HISTORY
+The
+.Fn mremap
+system call first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
+.Sh BUGS
+The call does not move executable mappings.
+A private file mapping that has a private copy of a page cannot grow.
+A moved page is mapped again at its first reference, not at the move.
+The
+.Dv PROT_BTI
+state of the old range does not move with the mapping.
+If the kernel cannot wire a page of the new part of a wired mapping, the
+call succeeds and the new part is not wired.
+If a move with
+.Dv MREMAP_FIXED
+fails for lack of swap space, the mappings that were in the new range can
+be removed already.

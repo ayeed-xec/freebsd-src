@@ -229,6 +229,13 @@ struct shm_largepage_conf {
 #define	MFD_HUGE_2GB			(31 << MFD_HUGE_SHIFT)
 #define	MFD_HUGE_16GB			(34 << MFD_HUGE_SHIFT)
 
+/*
+ * Flags for mremap().
+ */
+#define	MREMAP_MAYMOVE			0x00000001
+#define	MREMAP_FIXED			0x00000002
+#define	MREMAP_DONTUNMAP		0x00000004
+
 #endif /* __BSD_VISIBLE */
 
 /*
@@ -359,6 +366,7 @@ int	shm_unlink(const char *);
 #endif
 #if __BSD_VISIBLE
 int	memfd_create(const char *, unsigned int);
+void	*mremap(void *, size_t, size_t, int, ...);
 int	shm_create_largepage(const char *, int, int, int, mode_t);
 int	shm_rename(const char *, const char *, int);
 #endif

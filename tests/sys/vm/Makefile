@@ -4,9 +4,12 @@ TESTSDIR=	${TESTSBASE}/sys/vm
 
 ATF_TESTS_C+=	mlock_test \
 		mmap_test \
+		mremap_test \
 		page_fault_signal \
 		shared_shadow_inval_test \
 		vm_sysinfo_test
+
+LIBADD.mremap_test+=	pthread util
 
 .if ${MACHINE_CPUARCH} == "aarch64"
 ATF_TESTS_C+=	mmap_bti_test
