@@ -25,7 +25,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd October 19, 2026
+.Dd October 20, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -274,6 +274,20 @@ acquire a new link.
 The
 .Dv O_EXCL
 flag prevents the file from ever acquiring a name.
+.Pp
+For a file that has never had a name,
+.Dv F_KINFO
+and
+.Xr procstat 1
+show the directory path saved at creation, followed by
+.Ql /#<inode> (deleted) .
+The path is relative to the reader's jail root.
+Renaming or removing the directory does not change the saved path.
+No path is reported if it was unavailable at creation or is outside
+the reader's jail.
+A successful
+.Fn linkat
+discards the saved path.
 .Pp
 The
 .Dv O_TMPFILE

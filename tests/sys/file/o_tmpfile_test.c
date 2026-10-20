@@ -27,14 +27,23 @@
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
+#include <sys/jail.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <sys/uio.h>
+#include <sys/user.h>
 #include <sys/wait.h>
 
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <jail.h>
+#include <mntopts.h>
 #include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +55,10 @@ static void setup(const atf_tc_t *);
 static int newfile(int, mode_t);
 static void check_io(int);
 static void *worker(void *);
+static void check_path(int, const char *);
+static void saved_path(int, const char *, char *, size_t);
+static void check_filedesc(pid_t, int, const char *);
+static void *kinfo_worker(void *);
 
 static void
 setup(const atf_tc_t *tc)
@@ -471,8 +484,388 @@ ATF_TC_BODY(threads, tc)
 		ATF_REQUIRE_EQ(0, pthread_join(threads[i], NULL));
 }
 
+static void
+check_path(int fd, const char *want)
+{
+	struct kinfo_file kif;
+
+	memset(&kif, 0, sizeof(kif));
+	kif.kf_structsize = sizeof(kif);
+	ATF_REQUIRE_EQ(0, fcntl(fd, F_KINFO, &kif));
+	ATF_REQUIRE_STREQ(want, kif.kf_path);
+}
+
+static void
+saved_path(int fd, const char *dir, char *buf, size_t size)
+{
+	struct stat sb;
+	int n;
+
+	ATF_REQUIRE_EQ(0, fstat(fd, &sb));
+	n = snprintf(buf, size, "%s/#%ju (deleted)",
+	    strcmp(dir, "/") == 0 ? "" : dir, (uintmax_t)sb.st_ino);
+	ATF_REQUIRE(n >= 0 && (size_t)n < size);
+}
+
+ATF_TC_WITHOUT_HEAD(path_saved);
+ATF_TC_BODY(path_saved, tc)
+{
+	char dir[PATH_MAX], want[PATH_MAX];
+	int fd, rfd;
+
+	setup(tc);
+	ATF_REQUIRE_EQ(0, mkdir("before", 0700));
+	ATF_REQUIRE(realpath("before", dir) != NULL);
+	fd = open("before", O_TMPFILE | O_RDWR, 0600);
+	ATF_REQUIRE(fd >= 0);
+	saved_path(fd, dir, want, sizeof(want));
+	check_path(fd, want);
+	rfd = openat(fd, "", O_RDONLY | O_EMPTY_PATH);
+	ATF_REQUIRE(rfd >= 0);
+	check_path(rfd, want);
+	ATF_REQUIRE_EQ(0, rename("before", "after"));
+	check_path(fd, want);
+	ATF_REQUIRE_EQ(0, rmdir("after"));
+	check_path(rfd, want);
+	ATF_REQUIRE_EQ(0, close(rfd));
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+
+ATF_TC_WITHOUT_HEAD(path_long);
+ATF_TC_BODY(path_long, tc)
+{
+	char name[241];
+	int fd, i;
+
+	setup(tc);
+	memset(name, 'x', sizeof(name) - 1);
+	name[sizeof(name) - 1] = '\0';
+	for (i = 0; i < 6; i++) {
+		ATF_REQUIRE_EQ(0, mkdir(name, 0700));
+		ATF_REQUIRE_EQ(0, chdir(name));
+	}
+	fd = newfile(O_RDWR, 0600);
+	check_path(fd, "");
+	ATF_REQUIRE_EQ(0, close(fd));
+	for (i = 0; i < 6; i++)
+		ATF_REQUIRE_EQ(0, chdir(".."));
+}
+
+ATF_TC(path_link);
+ATF_TC_HEAD(path_link, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(path_link, tc)
+{
+	struct statfs fs;
+	char cwd[PATH_MAX], want[PATH_MAX];
+	int fd;
+
+	setup(tc);
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	ATF_REQUIRE_EQ(0, statfs(".", &fs));
+	if (strcmp(fs.f_fstypename, "nullfs") == 0)
+		ATF_REQUIRE_EQ(0, statfs(fs.f_mntfromname, &fs));
+	fd = newfile(O_RDWR, 0600);
+	saved_path(fd, cwd, want, sizeof(want));
+	check_path(fd, want);
+	ATF_REQUIRE_EQ(0,
+	    linkat(fd, "", AT_FDCWD, "named", AT_EMPTY_PATH));
+	if (strcmp(fs.f_fstypename, "tmpfs") == 0) {
+		ATF_REQUIRE(snprintf(want, sizeof(want), "%s/named", cwd) <
+		    (int)sizeof(want));
+		check_path(fd, want);
+	} else {
+		ATF_REQUIRE_STREQ("ufs", fs.f_fstypename);
+		check_path(fd, "");
+	}
+	ATF_REQUIRE_EQ(0, unlink("named"));
+	check_path(fd, "");
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+
+ATF_TC_WITHOUT_HEAD(path_suffix);
+ATF_TC_BODY(path_suffix, tc)
+{
+	char cwd[PATH_MAX], name[241];
+	size_t len, n;
+	int fd;
+
+	setup(tc);
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	len = strlen(cwd);
+	ATF_REQUIRE(len < 1017);
+	while (len < 1018) {
+		n = MIN(sizeof(name) - 1, 1018 - len - 1);
+		if (len + n + 1 == 1017)
+			n--;
+		memset(name, 'x', n);
+		name[n] = '\0';
+		ATF_REQUIRE_EQ(0, mkdir(name, 0700));
+		ATF_REQUIRE_EQ(0, chdir(name));
+		len += n + 1;
+	}
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	ATF_REQUIRE_EQ(1018, strlen(cwd));
+	fd = newfile(O_RDWR, 0600);
+	check_path(fd, "");
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+
+ATF_TC_WITH_CLEANUP(file_mount);
+ATF_TC_HEAD(file_mount, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "require.kmods", "nullfs");
+}
+ATF_TC_BODY(file_mount, tc)
+{
+	struct statfs fs;
+	char cwd[PATH_MAX], source[PATH_MAX], target[PATH_MAX];
+	char errmsg[256];
+	struct stat sb, linked, source_sb;
+	struct iovec *iov;
+	const char *want;
+	int fd, iovlen, sourcefd;
+
+	ATF_REQUIRE_EQ(0,
+	    chdir(atf_tc_get_config_var_wd(tc, "directory", ".")));
+	ATF_REQUIRE_EQ(0, mkdir("file-mount", 0700));
+	ATF_REQUIRE_EQ(0, chdir("file-mount"));
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	ATF_REQUIRE_EQ(0, statfs(".", &fs));
+	ATF_REQUIRE(snprintf(source, sizeof(source), "%s/source", cwd) <
+	    (int)sizeof(source));
+	ATF_REQUIRE(snprintf(target, sizeof(target), "%s/covered", cwd) <
+	    (int)sizeof(target));
+	sourcefd = open(source, O_CREAT | O_EXCL | O_RDWR, 0600);
+	fd = open(target, O_CREAT | O_EXCL | O_RDWR, 0600);
+	ATF_REQUIRE(sourcefd >= 0 && fd >= 0);
+	ATF_REQUIRE_EQ(0, fstat(sourcefd, &source_sb));
+	ATF_REQUIRE_EQ(0, close(sourcefd));
+	iov = NULL;
+	iovlen = 0;
+	build_iovec(&iov, &iovlen, __DECONST(char *, "fstype"),
+	    __DECONST(char *, "nullfs"), (size_t)-1);
+	build_iovec(&iov, &iovlen, __DECONST(char *, "fspath"),
+	    target, (size_t)-1);
+	build_iovec(&iov, &iovlen, __DECONST(char *, "target"),
+	    source, (size_t)-1);
+	build_iovec(&iov, &iovlen, __DECONST(char *, "errmsg"), errmsg,
+	    sizeof(errmsg));
+	errmsg[0] = '\0';
+	ATF_REQUIRE_MSG(nmount(iov, iovlen, 0) == 0, "nmount: %s",
+	    errmsg[0] != '\0' ? errmsg : strerror(errno));
+	free_iovec(&iov, &iovlen);
+	if (strcmp(fs.f_fstypename, "tmpfs") == 0)
+		want = target;
+	else {
+		ATF_REQUIRE_STREQ("ufs", fs.f_fstypename);
+		want = "";
+	}
+	check_path(fd, want);
+	check_filedesc(getpid(), fd, want);
+	ATF_REQUIRE_EQ(0, linkat(fd, "", AT_FDCWD, "linked", AT_EMPTY_PATH));
+	ATF_REQUIRE_EQ(0, fstat(fd, &sb));
+	ATF_REQUIRE_EQ(0, stat("linked", &linked));
+	ATF_REQUIRE_EQ(source_sb.st_ino, linked.st_ino);
+	ATF_REQUIRE_EQ(1, linked.st_nlink);
+	ATF_REQUIRE_EQ(2, sb.st_nlink);
+	ATF_REQUIRE_EQ(0, unmount(target, 0));
+	ATF_REQUIRE_EQ(0, stat(target, &linked));
+	ATF_REQUIRE_EQ(sb.st_ino, linked.st_ino);
+	ATF_REQUIRE_EQ(0, stat("linked", &linked));
+	ATF_REQUIRE_EQ(sb.st_ino, linked.st_ino);
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+ATF_TC_CLEANUP(file_mount, tc)
+{
+
+	if (chdir(atf_tc_get_config_var_wd(tc, "directory", ".")) == 0)
+		(void)unmount("file-mount/covered", MNT_FORCE);
+}
+
+ATF_TC_WITHOUT_HEAD(path_ordinary);
+ATF_TC_BODY(path_ordinary, tc)
+{
+	struct statfs fs;
+	char cwd[PATH_MAX], want[PATH_MAX];
+	int fd;
+
+	setup(tc);
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	ATF_REQUIRE_EQ(0, statfs(".", &fs));
+	if (strcmp(fs.f_fstypename, "nullfs") == 0)
+		ATF_REQUIRE_EQ(0, statfs(fs.f_mntfromname, &fs));
+	fd = open("ordinary", O_CREAT | O_EXCL | O_RDWR, 0600);
+	ATF_REQUIRE(fd >= 0);
+	if (strcmp(fs.f_fstypename, "tmpfs") == 0) {
+		ATF_REQUIRE(snprintf(want, sizeof(want), "%s/ordinary", cwd) <
+		    (int)sizeof(want));
+		check_path(fd, want);
+	} else {
+		ATF_REQUIRE_STREQ("ufs", fs.f_fstypename);
+		check_path(fd, "");
+	}
+	ATF_REQUIRE_EQ(0, unlink("ordinary"));
+	check_path(fd, "");
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+
+static void
+check_filedesc(pid_t pid, int fd, const char *want)
+{
+	struct kinfo_file *kif;
+	char *buf, *end, *p;
+	size_t size;
+	int mib[4];
+	bool found;
+
+	mib[0] = CTL_KERN;
+	mib[1] = KERN_PROC;
+	mib[2] = KERN_PROC_FILEDESC;
+	mib[3] = pid;
+	ATF_REQUIRE_EQ(0, sysctl(mib, nitems(mib), NULL, &size, NULL, 0));
+	size += sizeof(*kif) * 4;
+	buf = malloc(size);
+	ATF_REQUIRE(buf != NULL);
+	ATF_REQUIRE_EQ(0, sysctl(mib, nitems(mib), buf, &size, NULL, 0));
+	found = false;
+	end = buf + size;
+	for (p = buf; p < end; p += kif->kf_structsize) {
+		kif = (struct kinfo_file *)p;
+		ATF_REQUIRE(kif->kf_structsize > 0);
+		ATF_REQUIRE(p + kif->kf_structsize <= end);
+		if (kif->kf_fd == fd) {
+			ATF_CHECK_STREQ(want, kif->kf_path);
+			found = true;
+			break;
+		}
+	}
+	free(buf);
+	ATF_REQUIRE(found);
+}
+
+ATF_TC(path_jail);
+ATF_TC_HEAD(path_jail, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+}
+ATF_TC_BODY(path_jail, tc)
+{
+	char dir[PATH_MAX], rootwant[PATH_MAX], subwant[PATH_MAX];
+	char want[PATH_MAX];
+	int ready[2], release[2];
+	pid_t child;
+	int fd, jid, outside, rootfd, status;
+	char byte;
+
+	setup(tc);
+	ATF_REQUIRE_EQ(0, mkdir("jail", 0755));
+	ATF_REQUIRE_EQ(0, mkdir("jail/sub", 0755));
+	ATF_REQUIRE_EQ(0, mkdir("jail-other", 0755));
+	outside = open("jail-other", O_TMPFILE | O_RDWR, 0600);
+	rootfd = open("jail", O_TMPFILE | O_RDWR, 0600);
+	fd = open("jail/sub", O_TMPFILE | O_RDWR, 0600);
+	ATF_REQUIRE(outside >= 0 && rootfd >= 0 && fd >= 0);
+	saved_path(rootfd, "/", rootwant, sizeof(rootwant));
+	saved_path(fd, "/sub", subwant, sizeof(subwant));
+	ATF_REQUIRE(realpath("jail/sub", want) != NULL);
+	saved_path(fd, want, dir, sizeof(dir));
+	ATF_REQUIRE(realpath("jail", want) != NULL);
+	ATF_REQUIRE_EQ(0, pipe(ready));
+	ATF_REQUIRE_EQ(0, pipe(release));
+	child = fork();
+	ATF_REQUIRE(child >= 0);
+	if (child == 0) {
+		ATF_REQUIRE_EQ(0, close(ready[0]));
+		ATF_REQUIRE_EQ(0, close(release[1]));
+		jid = jail_setv(JAIL_CREATE | JAIL_ATTACH, "path", want, NULL);
+		ATF_REQUIRE_MSG(jid > 0, "jail_setv: %s", jail_errmsg);
+		check_path(rootfd, rootwant);
+		check_path(fd, subwant);
+		check_path(outside, "");
+		ATF_REQUIRE_EQ(1, write(ready[1], "r", 1));
+		ATF_REQUIRE_EQ(1, read(release[0], &byte, 1));
+		_exit(0);
+	}
+	ATF_REQUIRE_EQ(0, close(ready[1]));
+	ATF_REQUIRE_EQ(0, close(release[0]));
+	ATF_REQUIRE_EQ(1, read(ready[0], &byte, 1));
+	check_filedesc(child, fd, dir);
+	ATF_REQUIRE_EQ(1, write(release[1], "r", 1));
+	ATF_REQUIRE_EQ(child, waitpid(child, &status, 0));
+	ATF_REQUIRE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	ATF_REQUIRE_EQ(0, close(outside));
+	ATF_REQUIRE_EQ(0, close(rootfd));
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+
+struct kinfo_race {
+	atomic_uint reads;
+	atomic_bool stop;
+	int fd;
+};
+
+static void *
+kinfo_worker(void *arg)
+{
+	struct kinfo_file kif;
+	struct kinfo_race *race;
+
+	race = arg;
+	while (!atomic_load(&race->stop)) {
+		memset(&kif, 0, sizeof(kif));
+		kif.kf_structsize = sizeof(kif);
+		(void)fcntl(race->fd, F_KINFO, &kif);
+		atomic_fetch_add(&race->reads, 1);
+	}
+	return (NULL);
+}
+
+ATF_TC(forced_unmount);
+ATF_TC_HEAD(forced_unmount, tc)
+{
+	atf_tc_set_md_var(tc, "require.user", "root");
+	atf_tc_set_md_var(tc, "timeout", "60");
+}
+ATF_TC_BODY(forced_unmount, tc)
+{
+	struct kinfo_race race;
+	pthread_t thread;
+	const char *dir;
+	unsigned int before;
+
+	if (!atf_tc_has_config_var(tc, "unmount"))
+		atf_tc_skip("the shell case supplies a private mount");
+	dir = atf_tc_get_config_var(tc, "unmount");
+	race.fd = open(dir, O_TMPFILE | O_RDWR, 0600);
+	ATF_REQUIRE(race.fd >= 0);
+	atomic_init(&race.reads, 0);
+	atomic_init(&race.stop, false);
+	ATF_REQUIRE_EQ(0, pthread_create(&thread, NULL, kinfo_worker, &race));
+	while (atomic_load(&race.reads) < 1000)
+		sched_yield();
+	ATF_REQUIRE_EQ(0, unmount(dir, MNT_FORCE));
+	before = atomic_load(&race.reads);
+	while (atomic_load(&race.reads) - before < 1000)
+		sched_yield();
+	atomic_store(&race.stop, true);
+	ATF_REQUIRE_EQ(0, pthread_join(thread, NULL));
+	ATF_REQUIRE_EQ(0, close(race.fd));
+}
+
 ATF_TP_ADD_TCS(tp)
 {
+	ATF_TP_ADD_TC(tp, file_mount);
+	ATF_TP_ADD_TC(tp, path_suffix);
+	ATF_TP_ADD_TC(tp, path_saved);
+	ATF_TP_ADD_TC(tp, path_long);
+	ATF_TP_ADD_TC(tp, path_link);
+	ATF_TP_ADD_TC(tp, path_ordinary);
+	ATF_TP_ADD_TC(tp, path_jail);
+	ATF_TP_ADD_TC(tp, forced_unmount);
 	ATF_TP_ADD_TC(tp, basic);
 	ATF_TP_ADD_TC(tp, mode);
 	ATF_TP_ADD_TC(tp, writeonly);

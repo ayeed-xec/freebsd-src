@@ -53,10 +53,12 @@
 #include <sys/file.h>
 #include <sys/filio.h>
 #include <sys/inotify.h>
+#include <sys/jail.h>
 #include <sys/ktr.h>
 #include <sys/ktrace.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
@@ -127,6 +129,8 @@ const struct fileops vnops = {
 
 const u_int io_hold_cnt = 16;
 static int vn_open_tmpfile(struct nameidata *, int, int, u_int, struct ucred *);
+
+MALLOC_DEFINE(M_TMPFILE, "tmpfile", "unnamed file directory paths");
 
 static int vn_io_fault_enable = 1;
 SYSCTL_INT(_debug, OID_AUTO, vn_io_fault_enable, CTLFLAG_RWTUN,
@@ -255,9 +259,12 @@ vn_open_tmpfile(struct nameidata *ndp, int fmode, int cmode,
 	struct vattr va;
 	struct mount *mp;
 	struct vnode *dvp, *vp;
+	char *path, *pathbuf;
 	int error;
 
 restart:
+	path = NULL;
+	pathbuf = NULL;
 	ndp->ni_cnd.cn_nameiop = LOOKUP;
 	ndp->ni_cnd.cn_flags = open2nameif(fmode, vn_open_flags,
 	    ndp->ni_cnd.cn_flags) &
@@ -277,6 +284,21 @@ restart:
 		error = ENOTDIR;
 		goto out;
 	}
+	pathbuf = malloc(MAXPATHLEN, M_TEMP, M_WAITOK);
+	error = vn_fullpath_global_smr(dvp, pathbuf, &path);
+	if (error == -1) {
+		free(pathbuf, M_TEMP);
+		pathbuf = NULL;
+		VOP_UNLOCK(dvp);
+		error = vn_fullpath_global(dvp, &path, &pathbuf);
+		vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
+		if (VN_IS_DOOMED(dvp)) {
+			error = ENOENT;
+			goto out;
+		}
+	}
+	if (error != 0)
+		path = NULL;
 	error = VOP_GETATTR(dvp, &va, cred);
 	if (error != 0)
 		goto out;
@@ -296,6 +318,7 @@ restart:
 	if (error != 0)
 		goto out;
 	if (vn_start_write(dvp, &mp, V_NOWAIT) != 0) {
+		free(pathbuf, M_TEMP);
 		vput(dvp);
 		NDFREE_PNBUF(ndp);
 		error = vn_start_write(NULL, &mp, V_XSLEEP | V_PCATCH);
@@ -322,12 +345,21 @@ restart:
 #endif
 		error = VOP_TMPFILE(dvp, &vp, &cn, &va);
 	VOP_VPUT_PAIR(dvp, error == 0 ? &vp : NULL, false);
+	if (error == 0 && path != NULL && !VN_IS_DOOMED(vp)) {
+		ASSERT_VOP_ELOCKED(vp, "vn_open_tmpfile");
+		KASSERT(vp->v_type == VREG && vp->v_tmpfile_path == NULL,
+		    ("invalid tmpfile vnode %p", vp));
+		vp->v_tmpfile_path = strdup(path, M_TMPFILE);
+		vn_irflag_set(vp, VIRF_TMPFILE);
+	}
+	free(pathbuf, M_TEMP);
 	vn_finished_write(mp);
 	ndp->ni_vp = vp;
 	if (error != 0)
 		NDFREE_PNBUF(ndp);
 	return (error);
 out:
+	free(pathbuf, M_TEMP);
 	vput(dvp);
 	ndp->ni_vp = NULL;
 	NDFREE_PNBUF(ndp);
@@ -3106,13 +3138,17 @@ int
 vn_fill_kinfo_vnode(struct vnode *vp, struct kinfo_file *kif)
 {
 	struct vattr va;
+	const char *path, *pr_path;
 	char *fullpath, *freepath;
+	size_t pr_pathlen;
 	int error;
+	bool path_missing;
 
 	kif->kf_un.kf_file.kf_file_type = vntype_to_kinfo(vp->v_type);
 	freepath = NULL;
 	fullpath = "-";
 	error = vn_fullpath(vp, &fullpath, &freepath);
+	path_missing = error != 0;
 	if (error == 0) {
 		strlcpy(kif->kf_path, fullpath, sizeof(kif->kf_path));
 	}
@@ -3130,6 +3166,31 @@ vn_fill_kinfo_vnode(struct vnode *vp, struct kinfo_file *kif)
 	va.va_rdev = NODEV;
 	vn_lock(vp, LK_SHARED | LK_RETRY);
 	error = VOP_GETATTR(vp, &va, curthread->td_ucred);
+	if (error == 0 && path_missing && !VN_IS_DOOMED(vp) &&
+	    vp->v_type == VREG && va.va_nlink == 0 &&
+	    (vn_irflag_read(vp) & VIRF_TMPFILE) != 0) {
+		ASSERT_VOP_LOCKED(vp, "vn_fill_kinfo_vnode");
+		path = vp->v_tmpfile_path;
+		pr_path = curthread->td_ucred->cr_prison->pr_path;
+		if (strcmp(pr_path, "/") != 0) {
+			pr_pathlen = strlen(pr_path);
+			if (strncmp(path, pr_path, pr_pathlen) == 0 &&
+			    (path[pr_pathlen] == '/' ||
+			    path[pr_pathlen] == '\0'))
+				path += pr_pathlen;
+			else
+				path = NULL;
+		}
+		if (path != NULL) {
+			if (strcmp(path, "/") == 0)
+				path++;
+			if (snprintf(kif->kf_path, sizeof(kif->kf_path),
+			    "%s/#%ju (deleted)", path,
+			    (uintmax_t)va.va_fileid) >=
+			    (int)sizeof(kif->kf_path))
+				kif->kf_path[0] = '\0';
+		}
+	}
 	VOP_UNLOCK(vp);
 	if (error != 0)
 		return (error);

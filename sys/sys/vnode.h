@@ -152,10 +152,11 @@ struct vnode {
 	 * Type specific fields, only one applies to any given vnode.
 	 */
 	union {
-		struct mount	*v_mountedhere;	/* v ptr to mountpoint (VDIR) */
+		struct mount	*v_mountedhere;	/* v mount (VDIR, VREG) */
 		struct unpcb	*v_unpcb;	/* v unix domain net (VSOCK) */
 		struct cdev	*v_rdev; 	/* v device (VCHR, VBLK) */
 		struct fifoinfo	*v_fifoinfo;	/* v fifo (VFIFO) */
+		char		*v_tmpfile_path;	/* v VREG path */
 	};
 
 	/*
@@ -245,6 +246,8 @@ _Static_assert(sizeof(struct vnode) <= 448, "vnode size crosses 448 bytes");
  *
  *	VIRF_DOOMED is doubly protected by the interlock and vnode lock.  Both
  *	are required for writing but the status may be checked with either.
+ *	VIRF_TMPFILE and v_tmpfile_path require the exclusive vnode lock for
+ *	writes.  Reading the path requires at least the shared vnode lock.
  */
 #define	VHOLD_NO_SMR	(1<<29)	/* Disable vhold_smr */
 #define VHOLD_ALL_FLAGS (VHOLD_NO_SMR)
@@ -260,6 +263,7 @@ _Static_assert(sizeof(struct vnode) <= 448, "vnode size crosses 448 bytes");
 #define	VIRF_INOTIFY	0x0080	/* This vnode is being watched */
 #define	VIRF_INOTIFY_PARENT 0x0100 /* A parent of this vnode may be being
 				      watched */
+#define	VIRF_TMPFILE	0x0200	/* The vnode holds a saved tmpfile path */
 
 #define	VI_UNUSED0	0x0001	/* unused */
 #define	VI_MOUNT	0x0002	/* Mount in progress */
@@ -410,6 +414,7 @@ struct vattr {
 #ifdef _KERNEL
 
 #ifdef MALLOC_DECLARE
+MALLOC_DECLARE(M_TMPFILE);
 MALLOC_DECLARE(M_VNODE);
 #endif
 
@@ -726,6 +731,7 @@ int	vn_getcwd(char *buf, char **retbuf, size_t *buflen);
 int	vn_fullpath(struct vnode *vp, char **retbuf, char **freebuf);
 int	vn_fullpath_jail(struct vnode *vp, char **retbuf, char **freebuf);
 int	vn_fullpath_global(struct vnode *vp, char **retbuf, char **freebuf);
+int	vn_fullpath_global_smr(struct vnode *vp, char *buf, char **retbuf);
 int	vn_fullpath_hardlink(struct vnode *vp, struct vnode *dvp,
 	    const char *hdrl_name, size_t hrdl_name_length, char **retbuf,
 	    char **freebuf, size_t *buflen);

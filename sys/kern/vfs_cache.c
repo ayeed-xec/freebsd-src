@@ -3391,6 +3391,23 @@ vn_fullpath_jail(struct vnode *vp, char **retbuf, char **freebuf)
 }
 
 /*
+ * Walk from the global root without taking vnode locks.  The caller supplies
+ * a MAXPATHLEN buffer.  Return -1 when the walk needs vnode locks.
+ */
+int
+vn_fullpath_global_smr(struct vnode *vp, char *buf, char **retbuf)
+{
+	size_t buflen;
+	int error;
+
+	buflen = MAXPATHLEN;
+	vfs_smr_enter();
+	error = vn_fullpath_any_smr(vp, rootvnode, buf, retbuf, &buflen, 0);
+	VFS_SMR_ASSERT_NOT_ENTERED();
+	return (error);
+}
+
+/*
  * This function is similar to vn_fullpath, but it attempts to lookup the
  * pathname relative to the global root mount point.  This is required for the
  * auditing sub-system, as audited pathnames must be absolute, relative to the

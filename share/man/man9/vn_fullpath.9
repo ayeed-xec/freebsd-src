@@ -32,7 +32,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 .\" DAMAGE.
 .\"
-.Dd September 29, 2025
+.Dd October 20, 2026
 .Dt VN_FULLPATH 9
 .Os
 .Sh NAME
@@ -47,6 +47,8 @@
 .Fn vn_fullpath_jail "struct vnode *vp" "char **retbuf" "char **freebuf"
 .Ft int
 .Fn vn_fullpath_global "struct vnode *vp" "char **retbuf" "char **freebuf"
+.Ft int
+.Fn vn_fullpath_global_smr "struct vnode *vp" "char *buf" "char **retbuf"
 .Ft int
 .Fo vn_fullpath_hardlink
 .Fa "struct vnode *vp" "struct vnode *dvp"
@@ -180,11 +182,48 @@ must point to a valid storage containing the size of the desired buffer, which
 will be reduced to
 .Dv MAXPATHLEN
 if in excess of it.
+.Pp
+The
+.Fn vn_fullpath_global_smr
+function performs only the lockless name-cache walk from the system root.
+The caller must hold a reference to
+.Fa vp
+and supply a
+.Dv MAXPATHLEN
+buffer in
+.Fa buf .
+On success,
+.Fa retbuf
+points within that buffer.
+The function neither allocates memory nor takes vnode locks.
+The caller may therefore hold a vnode lock.
+If the function returns \-1, a walk that takes vnode locks is required.
+The caller must release any vnode locks before using
+.Fn vn_fullpath_global
+as a fallback.
 .Sh RETURN VALUES
 If the vnode is successfully converted to a pathname, 0 is returned;
 otherwise, an error number is returned.
+The
+.Fn vn_fullpath_global_smr
+function can also return \-1 when it cannot complete the lockless walk.
+.Sh ERRORS
+The
+.Fn vn_fullpath_global_smr
+function returns
+.Er ENOMEM
+if the path does not fit in the supplied buffer.
 .Sh SEE ALSO
 .Xr free 9
+.Sh STANDARDS
+These functions are
+.Fx
+kernel interfaces.
+.Sh HISTORY
+The
+.Fn vn_fullpath_global_smr
+function first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
 .Sh AUTHORS
 .An -nosplit
 This manual page was initially written by

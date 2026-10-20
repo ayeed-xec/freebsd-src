@@ -17,7 +17,7 @@ TEST_METADATA.o_tmpfile_fs_test+= is_exclusive="true"
 PROGS+=		flock_helper
 PROGS+=		o_tmpfile_helper
 
-LIBADD.o_tmpfile_test=	pthread
+LIBADD.o_tmpfile_test=	jail pthread util
 
 LIBADD.closefrom_test=	util
 

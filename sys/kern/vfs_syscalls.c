@@ -1862,6 +1862,13 @@ kern_linkat_vp(struct thread *td, struct vnode *vp, int fd, const char *path,
 				return (EAGAIN);
 			}
 			error = VOP_LINK(nd.ni_dvp, vp, &nd.ni_cnd);
+			if (error == 0 &&
+			    (vn_irflag_read(vp) & VIRF_TMPFILE) != 0) {
+				ASSERT_VOP_ELOCKED(vp, "kern_linkat_vp");
+				free(vp->v_tmpfile_path, M_TMPFILE);
+				vp->v_tmpfile_path = NULL;
+				vn_irflag_unset(vp, VIRF_TMPFILE);
+			}
 			VOP_VPUT_PAIR(nd.ni_dvp, &vp, true);
 			vn_finished_write(mp);
 			NDFREE_PNBUF(&nd);

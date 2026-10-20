@@ -41,6 +41,7 @@
 #include <sys/sysctl.h>
 #include <sys/thr.h>
 #include <sys/uio.h>
+#include <sys/user.h>
 #include <sys/wait.h>
 
 #include <atf-c.h>
@@ -611,6 +612,83 @@ ATF_TC_BODY(fd, tc)
 	free(want);
 }
 
+APROCFS_TC(tmpfile_path, "An unnamed file has its creation directory");
+ATF_TC_BODY(tmpfile_path, tc)
+{
+	char buf[PATH_MAX], cwd[PATH_MAX], path[64], want[PATH_MAX];
+	struct stat sb;
+	ssize_t n;
+	int fd, other;
+
+	mount_aprocfs();
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	fd = open(".", O_TMPFILE | O_RDWR, 0600);
+	ATF_REQUIRE_MSG(fd >= 0, "open: %s", strerror(errno));
+	ATF_REQUIRE_EQ(0, fstat(fd, &sb));
+	ATF_REQUIRE(snprintf(want, sizeof(want), "%s/#%ju (deleted)",
+	    cwd, (uintmax_t)sb.st_ino) < (int)sizeof(want));
+	snprintf(path, sizeof(path), MNT "/self/fd/%d", fd);
+	n = readlink(path, buf, sizeof(buf) - 1);
+	ATF_REQUIRE(n > 0);
+	buf[n] = '\0';
+	ATF_CHECK_STREQ(want, buf);
+	other = open(path, O_RDWR);
+	ATF_REQUIRE_MSG(other >= 0, "open: %s", strerror(errno));
+	ATF_REQUIRE_EQ(5, write(fd, "hello", 5));
+	ATF_REQUIRE_EQ(5, lseek(other, 0, SEEK_CUR));
+	ATF_REQUIRE_EQ(0, lseek(other, 0, SEEK_SET));
+	ATF_REQUIRE_EQ(5, read(fd, buf, 5));
+	ATF_CHECK_EQ(0, memcmp(buf, "hello", 5));
+	ATF_REQUIRE_EQ(0, close(other));
+	ATF_REQUIRE_EQ(0, close(fd));
+}
+
+APROCFS_TC(tmpfile_suffix, "A long tmpfile path keeps the complete suffix");
+ATF_TC_BODY(tmpfile_suffix, tc)
+{
+	char buf[PATH_MAX], cwd[PATH_MAX], name[241], path[64], want[64];
+	struct kinfo_file kif;
+	struct stat sb;
+	size_t len, part;
+	ssize_t n;
+	int dirfd, fd;
+
+	mount_aprocfs();
+	dirfd = open(MNT, O_RDONLY | O_DIRECTORY);
+	ATF_REQUIRE(dirfd >= 0);
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	len = strlen(cwd);
+	ATF_REQUIRE(len < 1017);
+	while (len < 1018) {
+		part = MIN(sizeof(name) - 1, 1018 - len - 1);
+		if (len + part + 1 == 1017)
+			part--;
+		memset(name, 'x', part);
+		name[part] = '\0';
+		ATF_REQUIRE_EQ(0, mkdir(name, 0700));
+		ATF_REQUIRE_EQ(0, chdir(name));
+		len += part + 1;
+	}
+	ATF_REQUIRE(getcwd(cwd, sizeof(cwd)) != NULL);
+	ATF_REQUIRE_EQ(1018, strlen(cwd));
+	fd = open(".", O_TMPFILE | O_RDWR, 0600);
+	ATF_REQUIRE_MSG(fd >= 0, "open: %s", strerror(errno));
+	memset(&kif, 0, sizeof(kif));
+	kif.kf_structsize = sizeof(kif);
+	ATF_REQUIRE_EQ(0, fcntl(fd, F_KINFO, &kif));
+	ATF_CHECK_STREQ("", kif.kf_path);
+	ATF_REQUIRE_EQ(0, fstat(fd, &sb));
+	snprintf(want, sizeof(want), "/#%ju (deleted)",
+	    (uintmax_t)sb.st_ino);
+	snprintf(path, sizeof(path), "self/fd/%d", fd);
+	n = readlinkat(dirfd, path, buf, sizeof(buf) - 1);
+	ATF_REQUIRE(n > 0);
+	buf[n] = '\0';
+	ATF_CHECK_STREQ(want, buf);
+	ATF_REQUIRE_EQ(0, close(fd));
+	ATF_REQUIRE_EQ(0, close(dirfd));
+}
+
 APROCFS_TC(fsync, "fsync(2) and fdatasync(2) give EINVAL");
 ATF_TC_BODY(fsync, tc)
 {
@@ -752,6 +830,8 @@ ATF_TC_BODY(unload_busy, tc)
 
 ATF_TP_ADD_TCS(tp)
 {
+	ATF_TP_ADD_TC(tp, tmpfile_path);
+	ATF_TP_ADD_TC(tp, tmpfile_suffix);
 
 	ATF_TP_ADD_TC(tp, root);
 	ATF_TP_ADD_TC(tp, self);

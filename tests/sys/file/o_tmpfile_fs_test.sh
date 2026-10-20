@@ -62,7 +62,9 @@ cases()
 	test="$(atf_get_srcdir)/o_tmpfile_test"
 	for tc in basic mode writeonly invalid paths empty_path \
 	    removed_directory immutable fhopen_reject link_name exclusive \
-	    capsicum ordinary ordinary_removed threads; do
+	    capsicum ordinary ordinary_removed threads path_ordinary path_long \
+	    path_suffix \
+	    path_saved path_link path_jail; do
 		atf_check -o ignore -e ignore "$test" -r "$(pwd)/result" \
 		    -v directory="$(pwd)/mnt" "$tc"
 		atf_check -o match:'^passed$' cat result
@@ -71,7 +73,7 @@ cases()
 
 fs_cleanup()
 {
-	for name in mnt lower; do
+	for name in mnt/file-mount/covered mnt lower; do
 		if mount -p | awk -v p="$(pwd)/$name" \
 		    '$2 == p { found = 1 } END { exit !found }'; then
 			umount -f "$(pwd)/$name"
@@ -188,8 +190,84 @@ crash_body()
 }
 crash_cleanup() { fs_cleanup; }
 
+atf_test_case path_unmount cleanup
+path_unmount_head() { fs_head; }
+path_unmount_body()
+{
+	atf_check mkdir mnt
+	atf_check mount -t tmpfs tmpfs "$(pwd)/mnt"
+	atf_check -o ignore -e ignore "$(atf_get_srcdir)/o_tmpfile_test" \
+	    -r "$(pwd)/result" -v unmount="$(pwd)/mnt" forced_unmount
+	atf_check -o match:'^passed$' cat result
+}
+path_unmount_cleanup() { fs_cleanup; }
+
+atf_test_case file_mount_ufs cleanup
+file_mount_ufs_head() { fs_head; }
+file_mount_ufs_body()
+{
+	ufs_mount -O 2
+	atf_check -o ignore -e ignore "$(atf_get_srcdir)/o_tmpfile_test" \
+	    -r "$(pwd)/result" -v directory="$(pwd)/mnt" file_mount
+	atf_check -o match:'^passed$' cat result
+}
+file_mount_ufs_cleanup() { fs_cleanup; }
+
+atf_test_case file_mount_tmpfs cleanup
+file_mount_tmpfs_head() { fs_head; }
+file_mount_tmpfs_body()
+{
+	atf_check mkdir mnt
+	atf_check mount -t tmpfs tmpfs "$(pwd)/mnt"
+	atf_check -o ignore -e ignore "$(atf_get_srcdir)/o_tmpfile_test" \
+	    -r "$(pwd)/result" -v directory="$(pwd)/mnt" file_mount
+	atf_check -o match:'^passed$' cat result
+}
+file_mount_tmpfs_cleanup() { fs_cleanup; }
+
+atf_test_case path_memory cleanup
+path_memory_head() { fs_head; }
+path_memory_body()
+{
+	atf_check mkdir mnt
+	atf_check mount -t tmpfs tmpfs "$(pwd)/mnt"
+	atf_check -o ignore -e ignore "$(atf_get_srcdir)/o_tmpfile_test" \
+	    -r "$(pwd)/result" -v directory="$(pwd)/mnt" path_saved
+	atf_check -o match:'^passed$' cat result
+	atf_check -o save:memory vmstat -m
+	atf_check awk \
+	    '$1 == "tmpfile" { found = 1; if ($2 != 0) exit 1 }
+	    END { if (!found) exit 1 }' memory
+}
+path_memory_cleanup() { fs_cleanup; }
+
+atf_test_case path_fallback cleanup
+path_fallback_head() { fs_head; }
+path_fallback_body()
+{
+	atf_check -o save:fast_lookup sysctl -n vfs.cache.param.fast_lookup
+	atf_check -o ignore sysctl vfs.cache.param.fast_lookup=0
+	atf_check mkdir mnt
+	atf_check mount -t tmpfs tmpfs "$(pwd)/mnt"
+	atf_check -o ignore -e ignore "$(atf_get_srcdir)/o_tmpfile_test" \
+	    -r "$(pwd)/result" -v directory="$(pwd)/mnt" path_saved
+	atf_check -o match:'^passed$' cat result
+}
+path_fallback_cleanup()
+{
+	if [ -f fast_lookup ]; then
+		sysctl "vfs.cache.param.fast_lookup=$(cat fast_lookup)"
+	fi
+	fs_cleanup
+}
+
 atf_init_test_cases()
 {
+	atf_add_test_case file_mount_ufs
+	atf_add_test_case file_mount_tmpfs
+	atf_add_test_case path_fallback
+	atf_add_test_case path_unmount
+	atf_add_test_case path_memory
 	atf_add_test_case tmpfs
 	atf_add_test_case ufs
 	atf_add_test_case softupdates

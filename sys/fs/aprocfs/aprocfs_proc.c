@@ -392,9 +392,8 @@ aprocfs_do_fd(struct thread *td, const struct aprocfs_key *key,
     struct sbuf *sb)
 {
 	struct kinfo_file *kif;
-	char *fullpath, *freepath;
-	struct vattr va;
 	struct stat st;
+	uint64_t fileid;
 	struct file *fp;
 	struct proc *p;
 	struct vnode *vp;
@@ -416,19 +415,19 @@ aprocfs_do_fd(struct thread *td, const struct aprocfs_key *key,
 	case DTYPE_FIFO:
 		if (vp == NULL)
 			goto unknown;
-		freepath = NULL;
-		if (vn_fullpath(vp, &fullpath, &freepath) == 0) {
-			sbuf_cat(sb, fullpath);
-			free(freepath, M_TEMP);
-			break;
+		kif = malloc(sizeof(*kif), M_APROCFS, M_WAITOK | M_ZERO);
+		error = vn_fill_kinfo_vnode(vp, kif);
+		if (error == 0) {
+			fileid = kif->kf_un.kf_file.kf_file_fileid;
+			if (kif->kf_path[0] != '\0')
+				sbuf_cat(sb, kif->kf_path);
+			else
+				sbuf_printf(sb, "/#%ju%s",
+				    (uintmax_t)fileid,
+				    kif->kf_un.kf_file.kf_file_nlink == 0 ?
+				    " (deleted)" : "");
 		}
-		vn_lock(vp, LK_SHARED | LK_RETRY);
-		error = VOP_GETATTR(vp, &va, td->td_ucred);
-		VOP_UNLOCK(vp);
-		if (error != 0)
-			break;
-		sbuf_printf(sb, "/#%ju%s", (uintmax_t)va.va_fileid,
-		    va.va_nlink == 0 ? " (deleted)" : "");
+		free(kif, M_APROCFS);
 		break;
 	case DTYPE_PIPE:
 	case DTYPE_SOCKET:

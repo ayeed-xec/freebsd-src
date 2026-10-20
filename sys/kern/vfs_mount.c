@@ -1169,6 +1169,14 @@ vfs_domount_first(
 	if (error == 0 && (fsflags & MNT_EMPTYDIR) != 0)
 		error = vn_dir_check_empty(vp);
 	if (error == 0) {
+		/* A file mount uses the same union slot as the saved path. */
+		if (vp->v_type == VREG &&
+		    (vn_irflag_read(vp) & VIRF_TMPFILE) != 0) {
+			ASSERT_VOP_ELOCKED(vp, "vfs_domount_first");
+			free(vp->v_tmpfile_path, M_TMPFILE);
+			vp->v_tmpfile_path = NULL;
+			vn_irflag_unset(vp, VIRF_TMPFILE);
+		}
 		VI_LOCK(vp);
 		if ((vp->v_iflag & VI_MOUNT) == 0 && vp->v_mountedhere == NULL)
 			vp->v_iflag |= VI_MOUNT;

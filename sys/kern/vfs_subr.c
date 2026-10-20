@@ -4446,6 +4446,12 @@ vgonel(struct vnode *vp)
 	}
 	if (vp->v_type == VSOCK)
 		vfs_unp_reclaim(vp);
+	if ((vn_irflag_read(vp) & VIRF_TMPFILE) != 0) {
+		ASSERT_VOP_ELOCKED(vp, "vgonel");
+		free(vp->v_tmpfile_path, M_TMPFILE);
+		vp->v_tmpfile_path = NULL;
+		vn_irflag_unset(vp, VIRF_TMPFILE);
+	}
 
 	/*
 	 * Clean out any buffers associated with the vnode.
