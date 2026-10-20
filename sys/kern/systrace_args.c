@@ -3582,6 +3582,14 @@ systrace_args(int sysnum, void *params, uint64_t *uarg, int *n_args)
 		*n_args = 5;
 		break;
 	}
+	/* rfork_ids */
+	case 607: {
+		struct rfork_ids_args *p = params;
+		iarg[a++] = p->flags; /* int */
+		uarg[a++] = (intptr_t)p->ids; /* struct rfork_ids * */
+		*n_args = 2;
+		break;
+	}
 	/* epoll_ctl */
 	case 610: {
 		struct epoll_ctl_args *p = params;
@@ -9617,6 +9625,19 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* rfork_ids */
+	case 607:
+		switch (ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "userland struct rfork_ids *";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* epoll_ctl */
 	case 610:
 		switch (ndx) {
@@ -11700,6 +11721,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 606:
 		if (ndx == 0 || ndx == 1)
 			p = "void *";
+		break;
+	/* rfork_ids */
+	case 607:
+		if (ndx == 0 || ndx == 1)
+			p = "pid_t";
 		break;
 	/* epoll_ctl */
 	case 610:

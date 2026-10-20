@@ -33,6 +33,7 @@
 #define	_SYS_UNISTD_H_
 
 #include <sys/cdefs.h>
+#include <sys/_types.h>
 
 /*
  * POSIX options and option groups we unconditionally do or don't
@@ -201,6 +202,11 @@
     RFTHREAD | RFSIGSHARE | RFLINUXTHPN | RFSTOPPED | RFHIGHPID | RFTSIGZMB | \
     RFPROCDESC | RFSPAWN | RFPPWAIT)
 #define	RFKERNELONLY	(RFSTOPPED | RFHIGHPID | RFPROCDESC)
+
+struct rfork_ids {
+	__pid_t		ri_pid;
+	__lwpid_t	ri_tid;
+};
 
 /* kcmp() options. */
 #define	KCMP_FILE	100

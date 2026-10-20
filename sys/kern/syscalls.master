@@ -3451,7 +3451,13 @@
 		    _In_opt_ void *new_address
 		);
 	}
-607-609	AUE_NULL	RESERVED
+607	AUE_RFORK	STD|CAPENABLED {
+		pid_t rfork_ids(
+		    int flags,
+		    _Out_ struct rfork_ids *ids
+		);
+	}
+608-609	AUE_NULL	RESERVED
 610	AUE_NULL	STD|CAPENABLED {
 		int epoll_ctl(
 		    int epfd,

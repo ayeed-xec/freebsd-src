@@ -575,6 +575,7 @@ enum {
 #define	TDP2_SAN_QUIET	0x00000008 /* Disable warnings from K(A|M)SAN */
 #define	TDP2_EXTERR	0x00000010 /* Kernel reported ext error */
 #define	TDP2_UEXTERR	0x00000020 /* User set ext error reporting ptr */
+#define	TDP2_FORKIDS	0x00000040 /* Store fork ids before user return */
 
 /*
  * Reasons that the current thread can not be run yet.
@@ -1114,6 +1115,7 @@ struct	fork_req {
 	int		fr_flags;
 	int		fr_pages;
 	int 		*fr_pidp;
+	lwpid_t		*fr_tidp;	/* Set before child runs. */
 	struct proc 	**fr_procp;
 	int 		*fr_pd_fd;
 	int 		fr_pd_flags;
@@ -1122,6 +1124,7 @@ struct	fork_req {
 #define	FR2_DROPSIG_CAUGHT	0x00000001 /* Drop caught non-DFL signals */
 #define	FR2_SHARE_PATHS		0x00000002 /* Invert sense of RFFDG for paths */
 #define	FR2_KPROC		0x00000004 /* Create a kernel process */
+#define	FR2_FORKIDS		0x00000008 /* Store ids in the child */
 };
 
 /*

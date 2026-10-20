@@ -566,6 +566,7 @@ int	 re_exec(const char *);
 int	 reboot(int);
 int	 revoke(const char *);
 pid_t	 rfork(int) __returns_twice;
+pid_t	 rfork_ids(int, struct rfork_ids *) __returns_twice;
 pid_t	 rfork_thread(int, void *, int (*)(void *), void *);
 int	 rresvport(int *);
 int	 rresvport_af(int *, int);

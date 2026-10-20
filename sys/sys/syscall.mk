@@ -448,5 +448,6 @@ MIASM =  \
 	thr_sigqueueinfo.o \
 	thr_get_name.o \
 	mremap.o \
+	rfork_ids.o \
 	epoll_ctl.o \
 	epoll_pwait2.o

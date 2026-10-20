@@ -190,6 +190,46 @@ sys_rfork(struct thread *td, struct rfork_args *uap)
 }
 
 int
+sys_rfork_ids(struct thread *td, struct rfork_ids_args *uap)
+{
+	struct fork_req fr;
+	struct rfork_ids ids;
+	int error;
+
+	if ((uap->flags & RFKERNELONLY) != 0)
+		return (EINVAL);
+	if ((uap->flags & RFSPAWN) != 0 && uap->flags != RFSPAWN)
+		return (EINVAL);
+	if ((uap->flags & (RFPROC | RFSPAWN)) == 0)
+		return (EINVAL);
+
+	AUDIT_ARG_FFLAGS(uap->flags);
+	bzero(&ids, sizeof(ids));
+	error = copyout(&ids, uap->ids, sizeof(ids));
+	if (error != 0)
+		return (error);
+
+	bzero(&fr, sizeof(fr));
+	fr.fr_flags2 = FR2_FORKIDS;
+	if ((uap->flags & RFSPAWN) != 0) {
+		fr.fr_flags = RFFDG | RFPROC | RFPPWAIT | RFMEM;
+		fr.fr_flags2 |= FR2_DROPSIG_CAUGHT;
+	} else {
+		fr.fr_flags = uap->flags;
+	}
+	fr.fr_pidp = &ids.ri_pid;
+	fr.fr_tidp = &ids.ri_tid;
+	error = fork1(td, &fr);
+	if (error == 0) {
+		td->td_retval[0] = ids.ri_pid;
+		td->td_retval[1] = 0;
+		/* The child can exist even if this second store fails. */
+		error = copyout(&ids, uap->ids, sizeof(ids));
+	}
+	return (error);
+}
+
+int
 sys_pdrfork(struct thread *td, struct pdrfork_args *uap)
 {
 	struct fork_req fr;
@@ -662,6 +702,9 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	p2->p_flag |= p1->p_flag & P_SUGID;
 	td2->td_pflags |= td->td_pflags & (TDP_ALTSTACK | TDP_SIGFASTBLOCK);
 	td2->td_pflags2 |= td->td_pflags2 & TDP2_UEXTERR;
+	/* The child cannot run yet; it clears its private flag on return. */
+	if ((fr->fr_flags2 & FR2_FORKIDS) != 0)
+		td2->td_pflags2 |= TDP2_FORKIDS;
 	SESS_LOCK(p1->p_session);
 	if (p1->p_session->s_ttyvp != NULL && p1->p_flag & P_CONTROLT)
 		p2->p_flag |= P_CONTROLT;
@@ -840,6 +883,8 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	if ((fr->fr_flags & RFSTOPPED) == 0) {
 		if (fr->fr_pidp != NULL)
 			*fr->fr_pidp = p2->p_pid;
+		if (fr->fr_tidp != NULL)
+			*fr->fr_tidp = td2->td_tid;
 		/*
 		 * If RFSTOPPED not requested, make child runnable and
 		 * add to run queue.
@@ -1232,9 +1277,26 @@ fork_exit(void (*callout)(void *, struct trapframe *), void *arg,
 void
 fork_return(struct thread *td, struct trapframe *frame)
 {
+	ksiginfo_t ksi;
+	struct rfork_ids ids;
 	struct proc *p;
+	void *idsp;
 
 	p = td->td_proc;
+	if ((td->td_pflags2 & TDP2_FORKIDS) != 0) {
+		td->td_pflags2 &= ~TDP2_FORKIDS;
+		idsp = (void *)td->td_sa.args[1];
+		ids.ri_pid = p->p_pid;
+		ids.ri_tid = td->td_tid;
+		/* Store in the child's address space without process locks. */
+		if (copyout(&ids, idsp, sizeof(ids)) != 0) {
+			ksiginfo_init_trap(&ksi);
+			ksi.ksi_signo = SIGSEGV;
+			ksi.ksi_code = SEGV_MAPERR;
+			ksi.ksi_addr = idsp;
+			trapsignal(td, &ksi);
+		}
+	}
 	if (td->td_dbgflags & TDB_STOPATFORK) {
 		PROC_LOCK(p);
 		if ((p->p_flag & P_TRACED) != 0) {

@@ -469,6 +469,8 @@ static const struct syscall_decode decoded_syscalls[] = {
 	  .args = { { Atfd, 0 }, { Name, 1 }, { Atfd, 2 }, { Name, 3 } } },
 	{ .name = "rfork", .ret_type = 1, .nargs = 1,
 	  .args = { { Rforkflags, 0 } } },
+	{ .name = "rfork_ids", .ret_type = 1, .nargs = 2,
+	  .args = { { Rforkflags, 0 }, { Ptr, 1 } } },
 	{ .name = "rmdir", .ret_type = 1, .nargs = 1,
 	  .args = { { Name, 0 } } },
 	{ .name = "rtprio", .ret_type = 1, .nargs = 3,

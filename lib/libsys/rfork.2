@@ -3,11 +3,12 @@
 .\" describe the actual BSD implementation. Permission for
 .\" use of this page comes from Rob Pike <rob@plan9.att.com>.
 .\"
-.Dd September 25, 2019
+.Dd October 21, 2026
 .Dt RFORK 2
 .Os
 .Sh NAME
-.Nm rfork
+.Nm rfork ,
+.Nm rfork_ids
 .Nd manipulate process resources
 .Sh LIBRARY
 .Lb libc
@@ -15,6 +16,8 @@
 .In unistd.h
 .Ft pid_t
 .Fn rfork "int flags"
+.Ft pid_t
+.Fn rfork_ids "int flags" "struct rfork_ids *ids"
 .Sh DESCRIPTION
 Forking, vforking or rforking are the only ways new processes are created.
 The
@@ -138,10 +141,54 @@ system call
 can be implemented as a call to
 .Fn rfork "RFFDG | RFPROC"
 but is not for backwards compatibility.
+.Pp
+The
+.Fn rfork_ids
+function creates a process with the same flag rules as
+.Fn rfork ,
+but requires
+.Dv RFPROC
+or
+.Dv RFSPAWN
+alone.
+The
+.Fa ids
+argument points to:
+.Bd -literal -offset indent
+struct rfork_ids {
+	pid_t   ri_pid;
+	lwpid_t ri_tid;
+};
+.Ed
+.Pp
+Before creating the child, the kernel writes zeros to this structure.
+Before returning in each process, it writes the child's process ID and
+thread ID to that process's copy of the structure.
+With
+.Dv RFMEM ,
+both processes share the structure and receive the same values.
+The caller must keep this storage writable until both stores complete.
+The kernel does not clear these values when the child exits.
+.Pp
+If the child cannot write the structure, it receives
+.Dv SIGSEGV
+with code
+.Dv SEGV_MAPERR
+and the address
+.Fa ids .
+For example,
+.Xr minherit 2
+with
+.Dv INHERIT_NONE
+can remove the mapping from the child.
+The child store precedes the debugger's fork stop.
+The call is permitted in Capsicum capability mode.
 .Sh RETURN VALUES
 Upon successful completion,
 .Fn rfork
-returns a value
+and
+.Fn rfork_ids
+return a value
 of 0 to the child process and returns the process ID of the child
 process to the parent process.
 Otherwise, a value of -1 is returned
@@ -149,6 +196,14 @@ to the parent process, no child process is created, and the global
 variable
 .Va errno
 is set to indicate the error.
+.Pp
+If the final parent store of
+.Fn rfork_ids
+fails, the call returns -1 with
+.Va errno
+set to
+.Er EFAULT ,
+but the child has already been created.
 .Sh ERRORS
 The
 .Fn rfork
@@ -178,7 +233,7 @@ The user is not the super user, and
 the soft resource limit corresponding to the
 .Fa resource
 argument
-.Dv RLIMIT_NOFILE
+.Dv RLIMIT_NPROC
 would be exceeded (see
 .Xr getrlimit 2 ) .
 .It Bq Er EINVAL
@@ -190,6 +245,20 @@ An invalid signal number was specified.
 .It Bq Er ENOMEM
 There is insufficient swap space for the new process.
 .El
+.Pp
+The
+.Fn rfork_ids
+function has the same errors, and also fails with:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The flags do not create a new process.
+.It Bq Er EFAULT
+The
+.Fa ids
+argument does not point to writable storage.
+Failure of the initial store creates no child.
+Failure of the final parent store leaves the child running.
+.El
 .Sh SEE ALSO
 .Xr fork 2 ,
 .Xr intro 2 ,
@@ -198,7 +267,18 @@ There is insufficient swap space for the new process.
 .Xr vfork 2 ,
 .Xr pthread_create 3 ,
 .Xr rfork_thread 3
+.Sh STANDARDS
+The
+.Fn rfork
+and
+.Fn rfork_ids
+functions are not specified by POSIX.
 .Sh HISTORY
 The
 .Fn rfork
 function first appeared in Plan9.
+.Pp
+The
+.Fn rfork_ids
+function first appeared in the freebsd-android-native fork of
+.Fx 15.1 .
