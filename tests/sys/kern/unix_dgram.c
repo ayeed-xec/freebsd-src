@@ -66,24 +66,27 @@ static struct sockaddr_un sun = {
 };
 
 /*
- * Fill socket to a state when next send(len) would fail.
+ * Fill socket to a state when next send(len) would fail.  Return the
+ * number of datagrams sent.
  *
  * Note that every datagram is prepended with sender address,
  * size of struct sockaddr.
  */
-static void
+static int
 fill(int fd, void *buf, ssize_t len)
 {
 	unsigned long recvspace;
 	size_t llen = sizeof(unsigned long);
 	ssize_t sent;
+	int n;
 
 	ATF_REQUIRE(sysctlbyname("net.local.dgram.recvspace", &recvspace,
 	    &llen, NULL, 0) == 0);
-	for (sent = 0;
+	for (sent = 0, n = 0;
 	    sent + len + sizeof(struct sockaddr) < recvspace;
-	    sent += len + sizeof(struct sockaddr))
+	    sent += len + sizeof(struct sockaddr), n++)
 		ATF_REQUIRE(send(fd, buf, len, 0) == len);
+	return (n);
 }
 
 ATF_TC_WITHOUT_HEAD(basic);
@@ -176,7 +179,7 @@ ATF_TC_BODY(basic, tc)
 ATF_TC_WITHOUT_HEAD(one2many);
 ATF_TC_BODY(one2many, tc)
 {
-	int one, many[3], two;
+	int one, many[3], two, nflood;
 #define	BUFSIZE	1024
 	char buf[BUFSIZE], goodboy[BUFSIZE], flooder[BUFSIZE], notconn[BUFSIZE];
 
@@ -212,10 +215,10 @@ ATF_TC_BODY(one2many, tc)
 	 * prioritized over flooders.  Connected senders are prioritized over
 	 * unconnected.
 	 *
-	 * Disconnecting a sender that has queued data optionally preserves
-	 * the data.  Allow the data to migrate to peers buffer only if the
-	 * latter is empty.  Otherwise discard it, to prevent against
-	 * connect-fill-close attack.
+	 * Disconnecting a sender that has queued data preserves the data
+	 * as far as it fits into the peer's buffer for unconnected sends.
+	 * The rest is discarded, to prevent against connect-fill-close
+	 * attack.
 	 */
 #define	FLOODER	13	/* for connected flooder on many[0] */
 #define	GOODBOY	42	/* for a good boy on many[1] */
@@ -235,7 +238,7 @@ ATF_TC_BODY(one2many, tc)
 	ATF_REQUIRE(buf[0] == NOTCONN);	/* only then message from sendto(2) */
 
 	/* Casual sender priority over a flooder. */
-	fill(many[0], flooder, sizeof(flooder));
+	nflood = fill(many[0], flooder, sizeof(flooder));
 	ATF_REQUIRE(send(many[0], flooder, BUFSIZE, 0) == -1);
 	ATF_REQUIRE(errno == ENOBUFS);
 	ATF_REQUIRE(send(many[1], goodboy, BUFSIZE, 0) == BUFSIZE);
@@ -261,8 +264,13 @@ ATF_TC_BODY(one2many, tc)
 	close(many[0]);
 	ATF_REQUIRE(recv(one, buf, sizeof(buf), 0) == sizeof(buf));
 	ATF_REQUIRE(buf[0] == NOTCONN);	/* message from sendto() */
+	for (int i = 2; i < nflood; i++) {
+		ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) ==
+		    sizeof(buf));
+		ATF_REQUIRE(buf[0] == FLOODER);	/* data from many[0] kept */
+	}
 	ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) == -1);
-	ATF_REQUIRE(errno == EAGAIN);	/* data from many[0] discarded */
+	ATF_REQUIRE(errno == EAGAIN);
 
 	/* Disconnect in absence of data from not connected. */
 	ATF_REQUIRE(send(many[1], goodboy, BUFSIZE, 0) == BUFSIZE);
@@ -276,6 +284,97 @@ ATF_TC_BODY(one2many, tc)
 	ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_PEEK) == 42);
 	ATF_REQUIRE(sendto(two, notconn, 42, 0, (struct sockaddr *)&sun,
 	    sizeof(sun)) == 42);
+	close(one);
+}
+
+/*
+ * Senders that connect, send one datagram and close before the receiver
+ * reads, as a logging client does for each message.  The receiver gets
+ * all the datagrams, in the order of the closes.
+ */
+ATF_TC_WITHOUT_HEAD(close_unread);
+ATF_TC_BODY(close_unread, tc)
+{
+	char buf[BUFSIZE];
+	int one, s;
+
+	ATF_REQUIRE((one = socket(PF_UNIX, SOCK_DGRAM, 0)) > 0);
+	ATF_REQUIRE(bind(one, (struct sockaddr *)&sun, sizeof(sun)) == 0);
+	for (int i = 0; i < 3; i++) {
+		ATF_REQUIRE((s = socket(PF_UNIX, SOCK_DGRAM, 0)) > 0);
+		ATF_REQUIRE(connect(s, (struct sockaddr *)&sun,
+		    sizeof(sun)) == 0);
+		buf[0] = i;
+		ATF_REQUIRE(send(s, buf, 42, 0) == 42);
+		close(s);
+	}
+	for (int i = 0; i < 3; i++) {
+		ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) == 42);
+		ATF_REQUIRE(buf[0] == i);
+	}
+	ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) == -1);
+	ATF_REQUIRE(errno == EAGAIN);
+	close(one);
+}
+
+/*
+ * A sender closes with more queued data than the receiver's buffer for
+ * unconnected sends has space for.  The datagrams that fit are kept, in
+ * order.  The others are discarded, and SO_RERROR reports the loss.
+ */
+ATF_TC_WITHOUT_HEAD(close_overflow);
+ATF_TC_BODY(close_overflow, tc)
+{
+	char buf[BUFSIZE], big[BUFSIZE], small[42];
+	socklen_t len;
+	int error, n, on, one, rcvbuf, s, two;
+
+	/* Space for 4 big datagrams and a small one. */
+	rcvbuf = 4 * (BUFSIZE + sizeof(struct sockaddr)) + 100;
+	on = 1;
+	ATF_REQUIRE((one = socket(PF_UNIX, SOCK_DGRAM, 0)) > 0);
+	ATF_REQUIRE(bind(one, (struct sockaddr *)&sun, sizeof(sun)) == 0);
+	ATF_REQUIRE(setsockopt(one, SOL_SOCKET, SO_RCVBUF, &rcvbuf,
+	    sizeof(rcvbuf)) == 0);
+	ATF_REQUIRE(setsockopt(one, SOL_SOCKET, SO_RERROR, &on,
+	    sizeof(on)) == 0);
+	ATF_REQUIRE((two = socket(PF_UNIX, SOCK_DGRAM, 0)) > 0);
+	ATF_REQUIRE((s = socket(PF_UNIX, SOCK_DGRAM, 0)) > 0);
+	ATF_REQUIRE(connect(s, (struct sockaddr *)&sun, sizeof(sun)) == 0);
+
+	/* The connected sender queues a big and a small datagram. */
+	big[0] = 1;
+	small[0] = 2;
+	ATF_REQUIRE(send(s, big, sizeof(big), 0) == sizeof(big));
+	ATF_REQUIRE(send(s, small, sizeof(small), 0) == sizeof(small));
+
+	/* Unconnected sends fill the buffer. */
+	buf[0] = 3;
+	for (n = 0; n < 4; n++)
+		ATF_REQUIRE(sendto(two, buf, sizeof(buf), 0,
+		    (struct sockaddr *)&sun, sizeof(sun)) == sizeof(buf));
+	ATF_REQUIRE(sendto(two, buf, sizeof(buf), 0, (struct sockaddr *)&sun,
+	    sizeof(sun)) == -1);
+	ATF_REQUIRE(errno == ENOBUFS);
+	len = sizeof(error);
+	ATF_REQUIRE(getsockopt(one, SOL_SOCKET, SO_ERROR, &error, &len) == 0);
+	ATF_REQUIRE(error == ENOBUFS);	/* the failed sendto() */
+
+	/* Only the small datagram fits when the sender closes. */
+	close(s);
+	ATF_REQUIRE(getsockopt(one, SOL_SOCKET, SO_ERROR, &error, &len) == 0);
+	ATF_REQUIRE(error == ENOBUFS);	/* the big datagram discarded */
+	for (n = 0; n < 4; n++) {
+		ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) ==
+		    sizeof(buf));
+		ATF_REQUIRE(buf[0] == 3);
+	}
+	ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) ==
+	    sizeof(small));
+	ATF_REQUIRE(buf[0] == 2);
+	ATF_REQUIRE(recv(one, buf, sizeof(buf), MSG_DONTWAIT) == -1);
+	ATF_REQUIRE(errno == EAGAIN);
+	close(two);
 	close(one);
 }
 
@@ -433,6 +532,8 @@ ATF_TP_ADD_TCS(tp)
 {
 	ATF_TP_ADD_TC(tp, basic);
 	ATF_TP_ADD_TC(tp, one2many);
+	ATF_TP_ADD_TC(tp, close_unread);
+	ATF_TP_ADD_TC(tp, close_overflow);
 	ATF_TP_ADD_TC(tp, event);
 	ATF_TP_ADD_TC(tp, selfgetpeername);
 	ATF_TP_ADD_TC(tp, fchmod);

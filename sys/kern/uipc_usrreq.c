@@ -3358,7 +3358,7 @@ static void
 unp_disconnect(struct unpcb *unp, struct unpcb *unp2)
 {
 	struct socket *so, *so2;
-	struct mbuf *m = NULL;
+	struct mbuf *d, *m = NULL;
 #ifdef INVARIANTS
 	struct unpcb *unptmp;
 #endif
@@ -3375,37 +3375,43 @@ unp_disconnect(struct unpcb *unp, struct unpcb *unp2)
 	case SOCK_DGRAM:
 		/*
 		 * Remove our send socket buffer from the peer's receive buffer.
-		 * Move the data to the receive buffer only if it is empty.
-		 * This is a protection against a scenario where a peer
-		 * connects, floods and disconnects, effectively blocking
+		 * Move the queued datagrams to the receive buffer, in order,
+		 * as far as it has space for them, the same as for sendto()
+		 * from an unconnected socket.  Discard the datagrams that do
+		 * not fit.  This is a protection against a scenario where a
+		 * peer connects, floods and disconnects, effectively blocking
 		 * sendto() from unconnected sockets.
 		 */
 		SOCK_RECVBUF_LOCK(so2);
-		if (!STAILQ_EMPTY(&so->so_snd.uxdg_mb)) {
+		if (!STAILQ_EMPTY(&so->so_snd.uxdg_mb))
 			TAILQ_REMOVE(&so2->so_rcv.uxdg_conns, &so->so_snd,
 			    uxdg_clist);
-			if (__predict_true((so2->so_rcv.sb_state &
-			    SBS_CANTRCVMORE) == 0) &&
-			    STAILQ_EMPTY(&so2->so_rcv.uxdg_mb)) {
-				STAILQ_CONCAT(&so2->so_rcv.uxdg_mb,
-				    &so->so_snd.uxdg_mb);
-				so2->so_rcv.uxdg_cc += so->so_snd.uxdg_cc;
-				so2->so_rcv.uxdg_ctl += so->so_snd.uxdg_ctl;
-				so2->so_rcv.uxdg_mbcnt += so->so_snd.uxdg_mbcnt;
+		while ((d = STAILQ_FIRST(&so->so_snd.uxdg_mb)) != NULL) {
+			STAILQ_REMOVE_HEAD(&so->so_snd.uxdg_mb, m_stailqpkt);
+			if (uipc_dgram_sbspace(&so2->so_rcv, d->m_pkthdr.len,
+			    d->m_pkthdr.memlen)) {
+				STAILQ_INSERT_TAIL(&so2->so_rcv.uxdg_mb, d,
+				    m_stailqpkt);
+				so2->so_rcv.uxdg_cc += d->m_pkthdr.len;
+				so2->so_rcv.uxdg_ctl += d->m_pkthdr.ctllen;
+				so2->so_rcv.uxdg_mbcnt += d->m_pkthdr.memlen;
 			} else {
-				m = STAILQ_FIRST(&so->so_snd.uxdg_mb);
-				STAILQ_INIT(&so->so_snd.uxdg_mb);
-				so2->so_rcv.sb_acc -= so->so_snd.uxdg_cc;
-				so2->so_rcv.sb_ccc -= so->so_snd.uxdg_cc;
-				so2->so_rcv.sb_ctl -= so->so_snd.uxdg_ctl;
-				so2->so_rcv.sb_mbcnt -= so->so_snd.uxdg_mbcnt;
+				so2->so_rcv.sb_acc -= d->m_pkthdr.len;
+				so2->so_rcv.sb_ccc -= d->m_pkthdr.len;
+				so2->so_rcv.sb_ctl -= d->m_pkthdr.ctllen;
+				so2->so_rcv.sb_mbcnt -= d->m_pkthdr.memlen;
+				d->m_nextpkt = m;
+				m = d;
 			}
-			/* Note: so may reconnect. */
-			so->so_snd.uxdg_cc = 0;
-			so->so_snd.uxdg_ctl = 0;
-			so->so_snd.uxdg_mbcnt = 0;
 		}
-		SOCK_RECVBUF_UNLOCK(so2);
+		/* Note: so may reconnect. */
+		so->so_snd.uxdg_cc = 0;
+		so->so_snd.uxdg_ctl = 0;
+		so->so_snd.uxdg_mbcnt = 0;
+		if (m != NULL)
+			soroverflow_locked(so2);
+		else
+			SOCK_RECVBUF_UNLOCK(so2);
 		UNP_REF_LIST_LOCK();
 #ifdef INVARIANTS
 		LIST_FOREACH(unptmp, &unp2->unp_refs, unp_reflink) {
