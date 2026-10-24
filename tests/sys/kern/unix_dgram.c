@@ -215,10 +215,10 @@ ATF_TC_BODY(one2many, tc)
 	 * prioritized over flooders.  Connected senders are prioritized over
 	 * unconnected.
 	 *
-	 * Disconnecting a sender that has queued data preserves the data
-	 * as far as it fits into the peer's buffer for unconnected sends.
-	 * The rest is discarded, to prevent against connect-fill-close
-	 * attack.
+	 * Disconnecting a sender that has queued data moves each queued
+	 * datagram to the peer's buffer for unconnected sends if that buffer
+	 * has space for it, and discards the others.  So a connect-fill-close
+	 * peer uses no more of that buffer than sendto(2) can.
 	 */
 #define	FLOODER	13	/* for connected flooder on many[0] */
 #define	GOODBOY	42	/* for a good boy on many[1] */

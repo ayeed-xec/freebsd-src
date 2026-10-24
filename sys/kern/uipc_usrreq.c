@@ -3375,12 +3375,12 @@ unp_disconnect(struct unpcb *unp, struct unpcb *unp2)
 	case SOCK_DGRAM:
 		/*
 		 * Remove our send socket buffer from the peer's receive buffer.
-		 * Move the queued datagrams to the receive buffer, in order,
-		 * as far as it has space for them, the same as for sendto()
-		 * from an unconnected socket.  Discard the datagrams that do
-		 * not fit.  This is a protection against a scenario where a
-		 * peer connects, floods and disconnects, effectively blocking
-		 * sendto() from unconnected sockets.
+		 * Move each queued datagram, in order, to the receive buffer
+		 * if it has space for that datagram, the same check as for
+		 * sendto() from an unconnected socket.  Discard the datagrams
+		 * that do not fit, so that a peer that connects, floods and
+		 * disconnects uses no more of the receive buffer than sendto()
+		 * from an unconnected socket can.
 		 */
 		SOCK_RECVBUF_LOCK(so2);
 		if (!STAILQ_EMPTY(&so->so_snd.uxdg_mb))

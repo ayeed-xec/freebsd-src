@@ -491,13 +491,16 @@ Messages coming from unconnected sends using
 land on the shared buffer of the receiving socket, which has the same
 size limit.
 When a connected socket is closed or disconnected before the receiver
-has read all of its messages, the remaining messages move to the shared
-buffer, as far as it has space for them.
+has read all of its messages, each remaining message moves to the shared
+buffer if the buffer has space for it.
 The messages that do not fit are discarded, as with a
 .Xr sendto 2
-to a full buffer: a receiver that has set
-.Dv SO_RERROR
-gets the error
+to a full buffer.
+If the receiver has set
+.Dv SO_RERROR ,
+the
+.Dv SO_ERROR
+socket option then reports
 .Er ENOBUFS .
 A side effect of the implementation is that it doesn't guarantee
 that writes from different senders will arrive at the receiver in the same
